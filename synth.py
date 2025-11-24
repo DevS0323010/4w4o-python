@@ -13,7 +13,7 @@ PHASE = 4
 class Synth:
     def __init__(self, sample_rate=44100, buffer_size=1024):
         """
-        A simple sine wave synthesizer that can play multiple frequencies simultaneously.
+        A simple synthesizer that can play multiple frequencies simultaneously.
 
         Args:
             sample_rate: Audio sample rate in Hz (default 44100)
@@ -28,6 +28,7 @@ class Synth:
         self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
         self.outputs = [(0, -1), (-1, -1), (-1, -1), (-1, -1)]
         self.volume = [(0.5,1), (0, 0), (0, 0), (0, 0)]
+        self.envelope = [(0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2)]
         self.modulations = [FREQUENCY, 0, 0, 0]
         self.stream = self.p.open(
             format=pyaudio.paFloat32,
@@ -47,6 +48,13 @@ class Synth:
         p = numpy.int8(p) & 127
         np = (p + 1) & 127
         return self.wavetables[table_num][p] * (1 - i) + self.wavetables[table_num][np] * i
+
+    def _get_envelope(self, item, t, end_time = None):
+        e = self.envelope[item]
+        result = numpy.where(t < e[0], t / e[0], numpy.where(t < e[1] + e[0], 1 - (1 - e[2]) * (t - e[0]) / e[1], e[2]))
+        if end_time is not None:
+            result = numpy.zeros((len(t),), dtype=numpy.float32)
+        return result
 
     def _generate_output(self, item, freq, t, frame_count):
         if self.outputs[item][0] == -1:
@@ -117,7 +125,7 @@ class Synth:
         with self.lock:
             if frequency not in self.active_frequencies:
                 self.active_frequencies.add(frequency)
-                self.playing_frequencies[frequency] = [0, 0, 0]
+                self.playing_frequencies[frequency] = [0, None, 0]
                 print(f"Started frequency: {frequency} Hz")
             else:
                 print(f"Frequency {frequency} Hz is already playing")
