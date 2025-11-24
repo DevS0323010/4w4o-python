@@ -3,6 +3,12 @@ import scipy
 import pyaudio
 import threading
 
+MIX = 0
+AMPLITUDE = 1
+RING = 2
+FREQUENCY = 3
+PHASE = 4
+
 
 class Synth:
     def __init__(self, sample_rate=44100, buffer_size=1024):
@@ -20,7 +26,9 @@ class Synth:
         self.lock = threading.Lock()
         self.p = pyaudio.PyAudio()
         self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
-        self.outputs = [0, -1, -1, -1]
+        self.outputs = [(0, -1), (-1, -1), (-1, -1), (-1, -1)]
+        self.volume = [(0.5,1), (0, 0), (0, 0), (0, 0)]
+        self.modulations = [FREQUENCY, 0, 0, 0]
         self.stream = self.p.open(
             format=pyaudio.paFloat32,
             channels=1,
@@ -33,14 +41,44 @@ class Synth:
     def update_wavetable(self, item, data: numpy.ndarray):
         self.wavetables[item] = data
 
-    def _generate_output(self, item, freq, t, frame_count):
-        if self.outputs[item] == -1:
-            return numpy.zeros(frame_count, dtype=numpy.float32)
-        f = t * freq * 128
+    def _get_wavetable(self, table_num, t):
+        f = t * 128
         i, p = numpy.modf(f)
         p = numpy.int8(p) & 127
         np = (p + 1) & 127
-        return self.wavetables[self.outputs[item]][p]*(1-i) + self.wavetables[self.outputs[item]][np]*i
+        return self.wavetables[table_num][p] * (1 - i) + self.wavetables[table_num][np] * i
+
+    def _generate_output(self, item, freq, t, frame_count):
+        if self.outputs[item][0] == -1:
+            return numpy.zeros(frame_count, dtype=numpy.float32)
+        if self.outputs[item][1] == -1:
+            w1 = self._get_wavetable(self.outputs[item][0], t*freq)
+            return w1
+        w2 = self._get_wavetable(self.outputs[item][1], t*freq) * self.volume[item][1]
+        if self.modulations[item] == MIX:
+            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+            total = (w1 + w2) / 2
+        elif self.modulations[item] == AMPLITUDE:
+            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+            total = w1 * (1 + w2)
+        elif self.modulations[item] == RING:
+            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+            total = w1 * w2
+        elif self.modulations[item] == PHASE:
+            phase = t + w2 / freq
+            w1 = self._get_wavetable(self.outputs[item][0], phase*freq) * self.volume[item][0]
+            total = w1
+        elif self.modulations[item] == FREQUENCY:
+            instantaneous_freq = freq + freq * w2
+            dt = 1.0 / self.sample_rate
+            phase_increments = instantaneous_freq * dt
+            accumulated_phase = numpy.cumsum(phase_increments) + self.playing_frequencies[freq][2]
+            self.playing_frequencies[freq][2] = accumulated_phase[-1]
+            w1 = self._get_wavetable(self.outputs[item][0], accumulated_phase) * self.volume[item][0]
+            total = w1
+        else:
+            total = numpy.zeros(frame_count, dtype=numpy.float32)
+        return total
 
     def _generate_frequency(self, freq, data, frame_count):
         phase = data[0]
@@ -79,7 +117,7 @@ class Synth:
         with self.lock:
             if frequency not in self.active_frequencies:
                 self.active_frequencies.add(frequency)
-                self.playing_frequencies[frequency] = [0, 0]
+                self.playing_frequencies[frequency] = [0, 0, 0]
                 print(f"Started frequency: {frequency} Hz")
             else:
                 print(f"Frequency {frequency} Hz is already playing")
@@ -107,7 +145,7 @@ class Synth:
             List of active frequencies
         """
         with self.lock:
-            return list(self.active_frequencies.keys())
+            return list(self.active_frequencies)
 
     def stop_all(self):
         """
@@ -115,6 +153,7 @@ class Synth:
         """
         with self.lock:
             self.active_frequencies.clear()
+            self.playing_frequencies.clear()
             print("Stopped all frequencies")
 
     def close(self):
