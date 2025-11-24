@@ -49,43 +49,48 @@ class Synth:
         np = (p + 1) & 127
         return self.wavetables[table_num][p] * (1 - i) + self.wavetables[table_num][np] * i
 
-    def _get_envelope(self, item, t, end_time = None):
+    def _get_envelope(self, item, t, end_time=None):
         e = self.envelope[item]
-        result = numpy.where(t < e[0], t / e[0], numpy.where(t < e[1] + e[0], 1 - (1 - e[2]) * (t - e[0]) / e[1], e[2]))
+        result = numpy.where(t < e[0], t / e[0], numpy.maximum(1 - (1 - e[2]) * (t - e[0]) / e[1], e[2]))
         if end_time is not None:
-            result = numpy.zeros((len(t),), dtype=numpy.float32)
+            end_time /= self.sample_rate
+            end_status = end_time / e[0] if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) / e[1], e[2])
+            result = numpy.where(t > end_time, end_status*(1 - (t - end_time) / e[3]), result)
+            result = numpy.maximum(result, 0)
         return result
 
     def _generate_output(self, item, freq, t, frame_count):
         if self.outputs[item][0] == -1:
             return numpy.zeros(frame_count, dtype=numpy.float32)
         if self.outputs[item][1] == -1:
-            w1 = self._get_wavetable(self.outputs[item][0], t*freq)
-            return w1
-        w2 = self._get_wavetable(self.outputs[item][1], t*freq) * self.volume[item][1]
-        if self.modulations[item] == MIX:
-            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
-            total = (w1 + w2) / 2
-        elif self.modulations[item] == AMPLITUDE:
-            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
-            total = w1 * (1 + w2)
-        elif self.modulations[item] == RING:
-            w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
-            total = w1 * w2
-        elif self.modulations[item] == PHASE:
-            phase = t + w2 / freq
-            w1 = self._get_wavetable(self.outputs[item][0], phase*freq) * self.volume[item][0]
-            total = w1
-        elif self.modulations[item] == FREQUENCY:
-            instantaneous_freq = freq + freq * w2
-            dt = 1.0 / self.sample_rate
-            phase_increments = instantaneous_freq * dt
-            accumulated_phase = numpy.cumsum(phase_increments) + self.playing_frequencies[freq][2]
-            self.playing_frequencies[freq][2] = accumulated_phase[-1]
-            w1 = self._get_wavetable(self.outputs[item][0], accumulated_phase) * self.volume[item][0]
-            total = w1
+            total = self._get_wavetable(self.outputs[item][0], t*freq)
         else:
-            total = numpy.zeros(frame_count, dtype=numpy.float32)
+            w2 = self._get_wavetable(self.outputs[item][1], t*freq) * self.volume[item][1]
+            if self.modulations[item] == MIX:
+                w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+                total = (w1 + w2) / 2
+            elif self.modulations[item] == AMPLITUDE:
+                w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+                total = w1 * (1 + w2)
+            elif self.modulations[item] == RING:
+                w1 = self._get_wavetable(self.outputs[item][0], t*freq) * self.volume[item][0]
+                total = w1 * w2
+            elif self.modulations[item] == PHASE:
+                phase = t + w2 / freq
+                w1 = self._get_wavetable(self.outputs[item][0], phase*freq) * self.volume[item][0]
+                total = w1
+            elif self.modulations[item] == FREQUENCY:
+                instantaneous_freq = freq + freq * w2
+                dt = 1.0 / self.sample_rate
+                phase_increments = instantaneous_freq * dt
+                accumulated_phase = numpy.cumsum(phase_increments) + self.playing_frequencies[freq][2]
+                self.playing_frequencies[freq][2] = accumulated_phase[-1]
+                w1 = self._get_wavetable(self.outputs[item][0], accumulated_phase) * self.volume[item][0]
+                total = w1
+            else:
+                total = numpy.zeros(frame_count, dtype=numpy.float32)
+        total = total * self._get_envelope(item, t, self.playing_frequencies[freq][1])
+        print(self.playing_frequencies[freq][1])
         return total
 
     def _generate_frequency(self, freq, data, frame_count):
@@ -98,7 +103,7 @@ class Synth:
         return audio_data
 
     def generate_samples(self, frame_count):
-        if not self.active_frequencies:
+        if not self.playing_frequencies:
             audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
         else:
             audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
