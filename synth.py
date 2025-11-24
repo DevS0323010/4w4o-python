@@ -156,6 +156,12 @@ class Synth:
             self.playing_frequencies.clear()
             print("Stopped all frequencies")
 
+    def stop_stream(self):
+        self.stream.stop_stream()
+
+    def start_stream(self):
+        self.stream.start_stream()
+
     def close(self):
         """
         Close the synthesizer and clean up resources.
