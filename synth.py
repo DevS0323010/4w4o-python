@@ -26,18 +26,20 @@ class Synth:
         self.lock = threading.Lock()
         self.p = pyaudio.PyAudio()
         self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
-        self.outputs = [(0, -1), (0, -1), (0, -1), (0, -1)]
-        self.volume = [(0.25, 0), (0.25, 0), (0.25, 0), (0.25, 0)]
-        self.envelope = [(0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2)]
-        self.filter_parameters = [(5000, None), (5000, None), (5000, None), (5000, None)]
+        self.outputs: list[tuple[int, int]] = [(-1, -1), (-1, -1), (-1, -1), (-1, -1)]
+        self.volume: list[tuple[int | float, int | float]] = [(0, 0), (0, 0), (0, 0), (0, 0)]
+        self.envelope: list[tuple[int | float, int | float, int | float, int | float]] \
+            = [(0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0)]
+        self.filter_parameters: list[tuple[int | float | None, int | float | None]] \
+            = [(None, None), (None, None), (None, None), (None, None)]
         self.filters = [[(None, None), (None, None)],
                         [(None, None), (None, None)],
                         [(None, None), (None, None)],
                         [(None, None), (None, None)]]
-        self.frequency = [(1.006, 1.0), (1.003, 1.0), (0.997, 1.0), (0.994, 1.0)]
-        self.absolute = [(False, False), (False, False), (False, False), (False, False)]
-        self.modulations = [FREQUENCY, 0, 0, 0]
-        self.setup_filters()
+        self.frequency: list[tuple[int | float, int | float]] = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
+        self.absolute: list[tuple[bool, bool]] = [(False, False), (False, False), (False, False), (False, False)]
+        self.modulations: list[int] = [0, 0, 0, 0]
+        self._setup_filters()
         self.stream = self.p.open(
             format=pyaudio.paFloat32,
             channels=1,
@@ -47,15 +49,47 @@ class Synth:
             stream_callback=self._audio_callback
         )
 
-    def setup_filters(self):
+    def _setup_filters(self):
         for i in range(4):
             if self.filter_parameters[i][0] is not None:
-                self.filters[i][0] = signal.butter(2, self.filter_parameters[i][0], fs=self.sample_rate, btype='lowpass', analog=False)
+                self.filters[i][0] = signal.butter(2, self.filter_parameters[i][0], fs=self.sample_rate,
+                                                   btype='lowpass', analog=False)
             if self.filter_parameters[i][1] is not None:
-                self.filters[i][1] = signal.butter(2, self.filter_parameters[i][1], fs=self.sample_rate, btype='highpass', analog=False)
+                self.filters[i][1] = signal.butter(2, self.filter_parameters[i][1], fs=self.sample_rate,
+                                                   btype='highpass', analog=False)
 
-    def update_wavetable(self, item, data: numpy.ndarray):
-        self.wavetables[item] = data
+    def update_wavetable(self, item: int, data: numpy.ndarray):
+        with self.lock:
+            self.wavetables[item] = data
+
+    def update_filters(self, item: int, data: tuple[int | float | None, int | float | None]):
+        with self.lock:
+            self.filter_parameters[item] = data
+            self._setup_filters()
+
+    def update_envelope(self, item: int, data: tuple[int | float, int | float, int | float, int | float]):
+        with self.lock:
+            self.envelope[item] = data
+
+    def update_modulation(self, item: int, data: int):
+        with self.lock:
+            self.modulations[item] = data
+
+    def update_frequency(self, item: int, data: tuple[int | float, int | float]):
+        with self.lock:
+            self.frequency[item] = data
+
+    def update_frequency_type(self, item: int, data: tuple[bool, bool]):
+        with self.lock:
+            self.absolute[item] = data
+
+    def update_output_wavetable(self, item: int, data: tuple[int, int]):
+        with self.lock:
+            self.outputs[item] = data
+
+    def update_volume(self, item: int, data: tuple[int | float, int | float]):
+        with self.lock:
+            self.volume[item] = data
 
     def _get_wavetable(self, table_num, t):
         f = t * 128
@@ -66,35 +100,36 @@ class Synth:
 
     def _get_envelope(self, item, t, end_time=None):
         e = self.envelope[item]
-        result = numpy.where(t < e[0], t / e[0], numpy.maximum(1 - (1 - e[2]) * (t - e[0]) / e[1], e[2]))
+        offset = e[1] if e[1] > 0 else 2147483647
+        result = numpy.where(t < e[0], t / e[0], numpy.maximum(1 - (1 - e[2]) * (t - e[0]) / offset, e[2]))
         if end_time is not None:
             end_time /= self.sample_rate
-            end_status = end_time / e[0] if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) / e[1], e[2])
-            result = numpy.where(t > end_time, end_status*(1 - (t - end_time) / e[3]), result)
+            end_status = end_time / e[0] if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) / offset, e[2])
+            result = numpy.where(t > end_time, end_status * (1 - (t - end_time) / e[3]), result)
             result = numpy.maximum(result, 0)
         return result
 
     def _generate_output(self, item, freq, t, frame_count):
-        freq1 = self.frequency[item][0] if self.absolute[item][0] else freq*self.frequency[item][0]
-        freq2 = self.frequency[item][1] if self.absolute[item][1] else freq*self.frequency[item][1]
+        freq1 = self.frequency[item][0] if self.absolute[item][0] else freq * self.frequency[item][0]
+        freq2 = self.frequency[item][1] if self.absolute[item][1] else freq * self.frequency[item][1]
         if self.outputs[item][0] == -1:
             return numpy.zeros(frame_count, dtype=numpy.float32)
         if self.outputs[item][1] == -1:
-            total = self._get_wavetable(self.outputs[item][0], t*freq1) * self.volume[item][0]
+            total = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
         else:
-            w2 = self._get_wavetable(self.outputs[item][1], t*freq2) * self.volume[item][1]
+            w2 = self._get_wavetable(self.outputs[item][1], t * freq2) * self.volume[item][1]
             if self.modulations[item] == MIX:
-                w1 = self._get_wavetable(self.outputs[item][0], t*freq1) * self.volume[item][0]
+                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
                 total = (w1 + w2) / 2
             elif self.modulations[item] == AMPLITUDE:
-                w1 = self._get_wavetable(self.outputs[item][0], t*freq1) * self.volume[item][0]
+                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
                 total = w1 * (1 + w2)
             elif self.modulations[item] == RING:
-                w1 = self._get_wavetable(self.outputs[item][0], t*freq1) * self.volume[item][0]
+                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
                 total = w1 * w2
             elif self.modulations[item] == PHASE:
                 phase = t + w2 / freq1
-                w1 = self._get_wavetable(self.outputs[item][0], phase*freq1) * self.volume[item][0]
+                w1 = self._get_wavetable(self.outputs[item][0], phase * freq1) * self.volume[item][0]
                 total = w1
             elif self.modulations[item] == FREQUENCY:
                 instantaneous_freq = freq1 + freq1 * w2

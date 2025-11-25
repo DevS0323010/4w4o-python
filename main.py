@@ -3,8 +3,16 @@ if __name__ == '__main__':
     import synth
     import numpy
     s = synth.Synth()
-    s.update_wavetable(0, numpy.arange(128) / 64 - 1)
 
+    s.update_wavetable(0, numpy.arange(128) / 64 - 1)
+    for i in range(4):
+        s.update_output_wavetable(i, (0, -1))
+        s.update_volume(i, (0.25, 0))
+        s.update_envelope(i, (0.2, 0.0, 1.0, 0.2))
+        s.update_filters(i, (5000, None))
+        s.update_frequency(i, (1.006-i*0.003, 1.0))
+        s.update_frequency_type(i, (False, False))
+        s.update_modulation(i, 0)
     s.stop_stream()
     s.start_frequency(440)
 
