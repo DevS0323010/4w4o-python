@@ -1,5 +1,5 @@
 import numpy
-import scipy
+from scipy import signal
 import pyaudio
 import threading
 
@@ -26,12 +26,18 @@ class Synth:
         self.lock = threading.Lock()
         self.p = pyaudio.PyAudio()
         self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
-        self.outputs = [(0, 0), (-1, -1), (-1, -1), (-1, -1)]
-        self.volume = [(0.5, 0.2), (0, 0), (0, 0), (0, 0)]
+        self.outputs = [(0, -1), (0, -1), (0, -1), (0, -1)]
+        self.volume = [(0.25, 0), (0.25, 0), (0.25, 0), (0.25, 0)]
         self.envelope = [(0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2), (0.2, 1.0, 0.3, 0.2)]
-        self.frequency = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
+        self.filter_parameters = [(5000, None), (5000, None), (5000, None), (5000, None)]
+        self.filters = [[(None, None), (None, None)],
+                        [(None, None), (None, None)],
+                        [(None, None), (None, None)],
+                        [(None, None), (None, None)]]
+        self.frequency = [(1.006, 1.0), (1.003, 1.0), (0.997, 1.0), (0.994, 1.0)]
         self.absolute = [(False, False), (False, False), (False, False), (False, False)]
         self.modulations = [FREQUENCY, 0, 0, 0]
+        self.setup_filters()
         self.stream = self.p.open(
             format=pyaudio.paFloat32,
             channels=1,
@@ -40,6 +46,13 @@ class Synth:
             frames_per_buffer=self.buffer_size,
             stream_callback=self._audio_callback
         )
+
+    def setup_filters(self):
+        for i in range(4):
+            if self.filter_parameters[i][0] is not None:
+                self.filters[i][0] = signal.butter(2, self.filter_parameters[i][0], fs=self.sample_rate, btype='lowpass', analog=False)
+            if self.filter_parameters[i][1] is not None:
+                self.filters[i][1] = signal.butter(2, self.filter_parameters[i][1], fs=self.sample_rate, btype='highpass', analog=False)
 
     def update_wavetable(self, item, data: numpy.ndarray):
         self.wavetables[item] = data
@@ -67,7 +80,7 @@ class Synth:
         if self.outputs[item][0] == -1:
             return numpy.zeros(frame_count, dtype=numpy.float32)
         if self.outputs[item][1] == -1:
-            total = self._get_wavetable(self.outputs[item][0], t*freq1)
+            total = self._get_wavetable(self.outputs[item][0], t*freq1) * self.volume[item][0]
         else:
             w2 = self._get_wavetable(self.outputs[item][1], t*freq2) * self.volume[item][1]
             if self.modulations[item] == MIX:
@@ -94,6 +107,10 @@ class Synth:
             else:
                 total = numpy.zeros(frame_count, dtype=numpy.float32)
         total = total * self._get_envelope(item, t, self.playing_frequencies[freq][1])
+        if self.filter_parameters[item][0] is not None:
+            total = signal.filtfilt(*self.filters[item][0], total)
+        if self.filter_parameters[item][1] is not None:
+            total = signal.filtfilt(*self.filters[item][1], total)
         return total
 
     def _generate_frequency(self, freq, data, frame_count):
