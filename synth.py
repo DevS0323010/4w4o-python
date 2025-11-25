@@ -155,7 +155,7 @@ class Synth:
         for i in range(4):
             audio_data += self._generate_output(i, freq, t, frame_count)
         self.playing_frequencies[freq][0] = phase + frame_count
-        return audio_data
+        return audio_data * self.playing_frequencies[freq][3]
 
     def generate_samples(self, frame_count):
         if not self.playing_frequencies:
@@ -175,7 +175,7 @@ class Synth:
 
         return audio_data.tobytes(), pyaudio.paContinue
 
-    def start_frequency(self, frequency):
+    def start_frequency(self, frequency, volume=1.0):
         """
         Start playing at the specified frequency.
 
@@ -185,7 +185,7 @@ class Synth:
         with self.lock:
             if frequency not in self.active_frequencies:
                 self.active_frequencies.add(frequency)
-                self.playing_frequencies[frequency] = [0, None, 0]
+                self.playing_frequencies[frequency] = [0, None, 0, volume]
                 print(f"Started frequency: {frequency} Hz")
             else:
                 print(f"Frequency {frequency} Hz is already playing")
