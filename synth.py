@@ -100,13 +100,17 @@ class Synth:
 
     def _get_envelope(self, item, t, end_time=None):
         e = self.envelope[item]
-        offset = e[1] if e[1] > 0 else 2147483647
-        result = numpy.where(t < e[0], t / e[0], numpy.maximum(1 - (1 - e[2]) * (t - e[0]) / offset, e[2]))
+        offset = 1/e[1] if e[1] > 0 else 2147483647
+        start = 1/e[0] if e[0] > 0 else 2147483647
+        result = numpy.where(t < e[0], t * start, numpy.maximum(1 - (1 - e[2]) * (t - e[0]) * offset, e[2]))
         if end_time is not None:
             end_time /= self.sample_rate
-            end_status = end_time / e[0] if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) / offset, e[2])
-            result = numpy.where(t > end_time, end_status * (1 - (t - end_time) / e[3]), result)
-            result = numpy.maximum(result, 0)
+            end_status = end_time * start if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) * offset, e[2])
+            if e[3] > 0:
+                result = numpy.where(t > end_time, end_status * (1 - (t - end_time) / e[3]), result)
+                result = numpy.maximum(result, 0)
+            else:
+                result = numpy.where(t > end_time, 0, result)
         return result
 
     def _generate_output(self, item, freq, t, frame_count):
