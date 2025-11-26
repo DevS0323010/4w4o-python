@@ -15,9 +15,8 @@ class Synth:
         """
         A simple synthesizer that can play multiple frequencies simultaneously.
 
-        Args:
-            sample_rate: Audio sample rate in Hz (default 44100)
-            buffer_size: Size of audio buffer (default 1024)
+        :param sample_rate: Audio sample rate in Hz (default 44100)
+        :param buffer_size: Size of audio buffer (default 1024)
         """
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
@@ -59,6 +58,13 @@ class Synth:
                                                    btype='highpass', analog=False)
 
     def update_wavetable(self, item: int, data: numpy.ndarray):
+        """
+        Updates one of the 4 wavetables.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The new wavetable as an 1D numpy array
+        :return: Nothing
+        """
         with self.lock:
             if data.ndim != 1:
                 raise ValueError("Array must be 1-dimensional.")
@@ -67,35 +73,83 @@ class Synth:
                 numpy.arange(len(data) + 1),
                 numpy.append(data, [data[0]])
             )[:128]
-            print(new_data)
             self.wavetables[item] = new_data
 
     def update_filters(self, item: int, data: tuple[int | float | None, int | float | None]):
+        """
+        Updates the filters of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The cutoff frequency of the filters (low pass, high pass), None if no filter is used.
+        :return: Nothing
+        """
         with self.lock:
             self.filter_parameters[item] = data
             self._setup_filters()
 
     def update_envelope(self, item: int, data: tuple[int | float, int | float, int | float, int | float]):
+        """
+        Updates the envelope of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The new envelope (attack, decay, sustain, release)
+        :return: Nothing
+        """
         with self.lock:
             self.envelope[item] = data
 
     def update_modulation(self, item: int, data: int):
+        """
+        Updates the modulation method of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: An integer (0: mix, 1: amplitude, 2: ring, 3: frequency, 4: phase)
+        :return: Nothing
+        """
         with self.lock:
             self.modulations[item] = data
 
     def update_frequency(self, item: int, data: tuple[int | float, int | float]):
+        """
+        Updates the frequency of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The new frequencies of 2 oscillators (hertz if absolute, times the base frequency if not)
+        :return: Nothing
+        """
         with self.lock:
             self.frequency[item] = data
 
     def update_frequency_type(self, item: int, data: tuple[bool, bool]):
+        """
+        Updates the frequency type (absolute or not) of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: If the frequency is absolute or not for the 2 oscillators
+        :return: Nothing
+        """
         with self.lock:
             self.absolute[item] = data
 
     def update_output_wavetable(self, item: int, data: tuple[int, int]):
+        """
+        Updates the wavetable id of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The wavetable ID (integer from 0 to 3) of the 2 oscillators
+        :return: Nothing
+        """
         with self.lock:
             self.outputs[item] = data
 
     def update_volume(self, item: int, data: tuple[int | float, int | float]):
+        """
+        Updates the volume of a specific item of outputs.
+
+        :param item: The specified item ID (integer from 0 to 3)
+        :param data: The amplitude of the 2 oscillators
+        :return: Nothing
+        """
         with self.lock:
             self.volume[item] = data
 
@@ -170,6 +224,12 @@ class Synth:
         return audio_data * self.playing_frequencies[freq][3]
 
     def generate_samples(self, frame_count):
+        """
+        Generate samples of the playing frequencies.
+
+        :param frame_count: The amount of samples to generate
+        :return: The generated samples as a numpy array
+        """
         if not self.playing_frequencies:
             audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
         else:
@@ -191,38 +251,31 @@ class Synth:
         """
         Start playing at the specified frequency.
 
-        Args:
-            frequency: Frequency in Hz (can be any float value, including microtonal)
+        :param frequency: Frequency in Hz (can be any float value, including microtonal)
+        :param volume: Volume of the note (default 1)
         """
         with self.lock:
             if frequency not in self.active_frequencies:
                 self.active_frequencies.add(frequency)
                 self.playing_frequencies[frequency] = [0, None, 0, volume]
-                print(f"Started frequency: {frequency} Hz")
-            else:
-                print(f"Frequency {frequency} Hz is already playing")
 
     def stop_frequency(self, frequency):
         """
         Stop playing at the specified frequency.
 
-        Args:
-            frequency: Frequency in Hz to stop
+        :param frequency: Frequency in Hz to stop
+        :return: Nothing
         """
         with self.lock:
             if frequency in self.active_frequencies:
                 self.active_frequencies.remove(frequency)
                 self.playing_frequencies[frequency][1] = self.playing_frequencies[frequency][0]
-                print(f"Stopped frequency: {frequency} Hz")
-            else:
-                print(f"Frequency {frequency} Hz is not currently playing")
 
     def get_active_frequencies(self):
         """
         Get a list of currently playing frequencies.
 
-        Returns:
-            List of active frequencies
+        :return: List of active frequencies
         """
         with self.lock:
             return list(self.active_frequencies)
@@ -234,7 +287,6 @@ class Synth:
         with self.lock:
             self.active_frequencies.clear()
             self.playing_frequencies.clear()
-            print("Stopped all frequencies")
 
     def stop_stream(self):
         self.stream.stop_stream()
@@ -249,4 +301,3 @@ class Synth:
         self.stream.stop_stream()
         self.stream.close()
         self.p.terminate()
-        print("Synthesizer closed")
