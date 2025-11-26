@@ -6,7 +6,7 @@ if __name__ == '__main__':
     t = synth.Synth()
 
     s.update_wavetable(0, numpy.arange(128) / 64 - 1)
-    t.update_wavetable(0, numpy.floor(numpy.arange(128) / 64)*2 - 1)
+    t.update_wavetable(0, numpy.array([0, 1, 0, -1]))
 
     for i in range(4):
         s.update_output_wavetable(i, (0, -1))

@@ -60,7 +60,15 @@ class Synth:
 
     def update_wavetable(self, item: int, data: numpy.ndarray):
         with self.lock:
-            self.wavetables[item] = data
+            if data.ndim != 1:
+                raise ValueError("Array must be 1-dimensional.")
+            new_data = numpy.interp(
+                numpy.linspace(0, len(data), 129),
+                numpy.arange(len(data) + 1),
+                numpy.append(data, [data[0]])
+            )[:128]
+            print(new_data)
+            self.wavetables[item] = new_data
 
     def update_filters(self, item: int, data: tuple[int | float | None, int | float | None]):
         with self.lock:
