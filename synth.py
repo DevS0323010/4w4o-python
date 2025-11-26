@@ -2,6 +2,7 @@ import numpy
 from scipy import signal
 import pyaudio
 import threading
+import json
 
 MIX = 0
 AMPLITUDE = 1
@@ -11,33 +12,44 @@ PHASE = 4
 
 
 class Synth:
-    def __init__(self, sample_rate=44100, buffer_size=1024):
+    waveforms: list[numpy.ndarray]
+    outputs: list[tuple[int, int]]
+    volume: list[tuple[int | float, int | float]]
+    envelope: list[tuple[int | float, int | float, int | float, int | float]]
+    filter_parameters: list[tuple[int | float | None, int | float | None]]
+    frequency: list[tuple[int | float, int | float]]
+    absolute: list[tuple[bool, bool]]
+    modulations: list[int]
+
+    def __init__(self, sample_rate=44100, buffer_size=1024, from_file=None):
         """
         A simple synthesizer that can play multiple frequencies simultaneously.
 
         :param sample_rate: Audio sample rate in Hz (default 44100)
         :param buffer_size: Size of audio buffer (default 1024)
         """
+        self.filters = [[(None, None), (None, None)],
+                        [(None, None), (None, None)],
+                        [(None, None), (None, None)],
+                        [(None, None), (None, None)]]
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.active_frequencies = set()
         self.playing_frequencies = {}
         self.lock = threading.Lock()
         self.p = pyaudio.PyAudio()
-        self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
-        self.outputs: list[tuple[int, int]] = [(-1, -1), (-1, -1), (-1, -1), (-1, -1)]
-        self.volume: list[tuple[int | float, int | float]] = [(0, 0), (0, 0), (0, 0), (0, 0)]
-        self.envelope: list[tuple[int | float, int | float, int | float, int | float]] \
-            = [(0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0)]
-        self.filter_parameters: list[tuple[int | float | None, int | float | None]] \
-            = [(None, None), (None, None), (None, None), (None, None)]
-        self.filters = [[(None, None), (None, None)],
-                        [(None, None), (None, None)],
-                        [(None, None), (None, None)],
-                        [(None, None), (None, None)]]
-        self.frequency: list[tuple[int | float, int | float]] = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
-        self.absolute: list[tuple[bool, bool]] = [(False, False), (False, False), (False, False), (False, False)]
-        self.modulations: list[int] = [0, 0, 0, 0]
+        if from_file is None:
+            self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
+            self.outputs = [(-1, -1), (-1, -1), (-1, -1), (-1, -1)]
+            self.volume = [(0, 0), (0, 0), (0, 0), (0, 0)]
+            self.envelope = [(0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 1.0, 0.0)]
+            self.filter_parameters = [(None, None), (None, None), (None, None), (None, None)]
+            self.frequency = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
+            self.absolute = [(False, False), (False, False), (False, False), (False, False)]
+            self.modulations = [0, 0, 0, 0]
+        else:
+            self.read_from_file(from_file)
+
         self._setup_filters()
         self.stream = self.p.open(
             format=pyaudio.paFloat32,
@@ -153,6 +165,32 @@ class Synth:
         with self.lock:
             self.volume[item] = data
 
+    def output_file(self, filename: str):
+        data = {
+            "wavetables": [table.tolist() for table in self.wavetables],
+            "outputs": [list(x) for x in self.outputs],
+            "volume": [list(x) for x in self.volume],
+            "envelope": [list(x) for x in self.envelope],
+            "filter_parameters": [list(x) for x in self.filter_parameters],
+            "frequency": [list(x) for x in self.frequency],
+            "absolute": [list(x) for x in self.absolute],
+            "modulations": self.modulations
+        }
+        with open(filename, "w") as f:
+            json.dump(data, f)
+
+    def read_from_file(self, filename: str):
+        with open(filename) as f:
+            data = json.load(f)
+        self.wavetables = [numpy.array(table) for table in data["wavetables"]]
+        self.outputs = [tuple(x) for x in data["outputs"]]
+        self.volume = [tuple(x) for x in data["volume"]]
+        self.envelope = [tuple(x) for x in data["envelope"]]
+        self.filter_parameters = [tuple(x) for x in data["filter_parameters"]]
+        self.frequency = [tuple(x) for x in data["frequency"]]
+        self.absolute = [tuple(x) for x in data["absolute"]]
+        self.modulations = data["modulations"]
+
     def _get_wavetable(self, table_num, t):
         f = t * 128
         i, p = numpy.modf(f)
@@ -162,8 +200,8 @@ class Synth:
 
     def _get_envelope(self, item, t, end_time=None):
         e = self.envelope[item]
-        offset = 1/e[1] if e[1] > 0 else 2147483647
-        start = 1/e[0] if e[0] > 0 else 2147483647
+        offset = 1 / e[1] if e[1] > 0 else 2147483647
+        start = 1 / e[0] if e[0] > 0 else 2147483647
         result = numpy.where(t < e[0], t * start, numpy.maximum(1 - (1 - e[2]) * (t - e[0]) * offset, e[2]))
         if end_time is not None:
             end_time /= self.sample_rate
