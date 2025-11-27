@@ -1,6 +1,6 @@
 import sys
 
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, Qt
 
 import synth
 from PySide6.QtWidgets import *
@@ -69,7 +69,7 @@ class SingleOscillator(QFrame):
         self.absolute.setText("Hz" if self.main_synth.absolute[self.item][self.osc_id] else "f")
 
 
-class SingleOutputLayout(QHBoxLayout):
+class WaveModulationLayout(QHBoxLayout):
     def __init__(self, main_synth: synth.Synth, item: int):
         super().__init__()
         self.item = item
@@ -98,13 +98,101 @@ class SingleOutputLayout(QHBoxLayout):
         self.wave_2.update_items()
 
 
+class EnvelopeFilterLayout(QHBoxLayout):
+    def __init__(self, main_synth: synth.Synth, item: int):
+        super().__init__()
+        self.main_synth = main_synth
+        self.item = item
+
+        self.envelope_box = QFrame()
+        self.filter_box = QFrame()
+        self.envelope_layout = QHBoxLayout()
+        self.filter_layout = QHBoxLayout()
+
+        self.envelope_params = [QDoubleSpinBox() for _ in range(4)]
+        self.envelope_params[0].valueChanged.connect(lambda x: self.update_envelope_item(0, x))
+        self.envelope_params[1].valueChanged.connect(lambda x: self.update_envelope_item(1, x))
+        self.envelope_params[2].valueChanged.connect(lambda x: self.update_envelope_item(2, x))
+        self.envelope_params[3].valueChanged.connect(lambda x: self.update_envelope_item(3, x))
+
+        self.filter_params = [QDoubleSpinBox() for _ in range(2)]
+
+        filter_labels = ["Low", "High"]
+        self.filter_enabled = [QPushButton(filter_labels[i]) for i in range(2)]
+        for i in range(2):
+            self.filter_params[i].setDecimals(0)
+            self.filter_params[i].setMaximum(20000.0)
+            self.filter_params[i].setMinimum(1.0)
+            self.filter_enabled[i].setCheckable(True)
+        self.filter_enabled[0].clicked.connect(lambda x: self.update_filter_item(0, checked=x))
+        self.filter_params[0].valueChanged.connect(lambda x: self.update_filter_item(0, value=x))
+        self.filter_enabled[1].clicked.connect(lambda x: self.update_filter_item(1, checked=x))
+        self.filter_params[1].valueChanged.connect(lambda x: self.update_filter_item(1, value=x))
+
+        self.update_values()
+
+        self.envelope_layout.addWidget(QLabel("Env:"))
+        envelope_labels = 'ADSR'
+        for i in range(4):
+            label = QLabel(envelope_labels[i])
+            self.envelope_layout.addWidget(label)
+            self.envelope_layout.addWidget(self.envelope_params[i])
+        self.filter_layout.addWidget(QLabel("Filt:"))
+        for i in range(2):
+            self.filter_layout.addWidget(self.filter_enabled[i])
+            self.filter_layout.addWidget(self.filter_params[i])
+
+        self.envelope_box.setLayout(self.envelope_layout)
+        self.filter_box.setLayout(self.filter_layout)
+
+        self.addWidget(self.envelope_box)
+        self.addWidget(self.filter_box)
+
+    def update_envelope_item(self, item, new):
+        tmp = list(self.main_synth.envelope[self.item])
+        tmp[item] = new
+        self.main_synth.update_envelope(self.item, tuple(tmp))
+
+    def update_filter_item(self, item, checked=None, value=None):
+        if checked is None:
+            checked = self.filter_enabled[item].isChecked()
+        update = False
+        if value is None:
+            value = self.filter_params[item].value()
+            update = True
+        new = value if checked else None
+        tmp = list(self.main_synth.filter_parameters[self.item])
+        tmp[item] = new
+        self.main_synth.update_filters(self.item, tuple(tmp))
+        if update:
+            self.update_values()
+
+    def update_values(self):
+        tmp = list(self.main_synth.envelope[self.item])
+        for i in range(4):
+            self.envelope_params[i].setValue(tmp[i])
+        tmp = list(self.main_synth.filter_parameters[self.item])
+        for i in range(2):
+            if tmp[i] is None:
+                self.filter_enabled[i].setChecked(False)
+            else:
+                self.filter_enabled[i].setChecked(True)
+                self.filter_params[i].setValue(tmp[i])
+
 
 class OutputLayout(QVBoxLayout):
     def __init__(self, main_synth: synth.Synth):
         super().__init__()
         self.main_synth = main_synth
         for i in range(4):
-            self.addLayout(SingleOutputLayout(self.main_synth, i))
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            sep.setStyleSheet(
+                "QFrame { background-color: #888888; }"
+            )
+            self.addWidget(sep)
+            self.addLayout(WaveModulationLayout(self.main_synth, i))
+            self.addLayout(EnvelopeFilterLayout(self.main_synth, i))
 
 
 class SynthUI(QWidget):
@@ -125,6 +213,7 @@ class SynthUI(QWidget):
             "QDoubleSpinBox { color: #FFFFFF; background-color: #1A1A1A; border: 1px solid #333333; }"
             "QComboBox { color: #FFFFFF; background-color: #1A1A1A; border: 1px solid #333333; }"
             "QPushButton { color: #FFFFFF; background-color: #222222; border: 1px solid #444444; }"
+            "QPushButton:checked { color: #FFFFFF; background-color: #777777; border: 1px solid #444444; }"
             "QFrame { color: #FFFFFF; background-color: #111111; border: 1px solid #444444; }"
             "QLabel { background-color: #111111; color: #FFFFFF; border: 0px; }"
         )
