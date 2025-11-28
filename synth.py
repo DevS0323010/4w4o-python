@@ -285,6 +285,7 @@ class Synth:
                     removed_frequencies.append(freq)
             for freq in removed_frequencies:
                 del self.playing_frequencies[freq]
+        audio_data = numpy.clip(audio_data, -1.0, 1.0)
         return audio_data
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
