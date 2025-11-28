@@ -1,7 +1,10 @@
+import os
 import sys
+from functools import partial
 
-from PySide6.QtGui import QPalette, Qt
-
+from PySide6.QtCore import QPoint
+from PySide6.QtGui import QPalette, Qt, QPainter, QPen
+import soundfile
 import synth
 from PySide6.QtWidgets import *
 
@@ -110,10 +113,8 @@ class EnvelopeFilterLayout(QHBoxLayout):
         self.filter_layout = QHBoxLayout()
 
         self.envelope_params = [QDoubleSpinBox() for _ in range(4)]
-        self.envelope_params[0].valueChanged.connect(lambda x: self.update_envelope_item(0, x))
-        self.envelope_params[1].valueChanged.connect(lambda x: self.update_envelope_item(1, x))
-        self.envelope_params[2].valueChanged.connect(lambda x: self.update_envelope_item(2, x))
-        self.envelope_params[3].valueChanged.connect(lambda x: self.update_envelope_item(3, x))
+        for i in range(4):
+            self.envelope_params[i].valueChanged.connect(partial(self.update_envelope_item, i))
 
         self.filter_params = [QDoubleSpinBox() for _ in range(2)]
 
@@ -124,10 +125,8 @@ class EnvelopeFilterLayout(QHBoxLayout):
             self.filter_params[i].setMaximum(20000.0)
             self.filter_params[i].setMinimum(1.0)
             self.filter_enabled[i].setCheckable(True)
-        self.filter_enabled[0].clicked.connect(lambda x: self.update_filter_item(0, checked=x))
-        self.filter_params[0].valueChanged.connect(lambda x: self.update_filter_item(0, value=x))
-        self.filter_enabled[1].clicked.connect(lambda x: self.update_filter_item(1, checked=x))
-        self.filter_params[1].valueChanged.connect(lambda x: self.update_filter_item(1, value=x))
+            self.filter_enabled[i].clicked.connect(partial(self.update_filter_item, i, value=None))
+            self.filter_params[i].valueChanged.connect(partial(self.update_filter_item, i, None))
 
         self.update_values()
 
@@ -180,6 +179,191 @@ class EnvelopeFilterLayout(QHBoxLayout):
                 self.filter_params[i].setValue(tmp[i])
 
 
+def clamp(a, b, value):
+    return max(a, min(b, value))
+
+
+class WaveDisplay(QFrame):
+    def __init__(self, main_synth: synth.Synth, item: int):
+        super().__init__()
+        self.main_synth = main_synth
+        self.item = item
+        self.samples = self.main_synth.wavetables[item].tolist()
+        self.prev_x = None
+        self.prev_y = None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        points = [QPoint(round(i * self.width() / 128),
+                         round(self.height() / 2 - self.samples[i] * self.height() * 0.45))
+                  for i in range(128)]
+        painter.setPen(QPen(Qt.white, 1.5))
+        painter.drawPolyline(points)
+        painter.end()
+        self.update()
+
+    def mousePressEvent(self, event, /):
+        x = clamp(0, 127, round(event.position().x() / self.width() * 128))
+        y = clamp(-1.0, 1.0, (self.height() / 2 - event.position().y()) / (self.height() * 0.45))
+        self.samples[x] = y
+        self.prev_x = x
+        self.prev_y = y
+
+    def mouseMoveEvent(self, event, /):
+        x = clamp(0, 127, round(event.position().x() / self.width() * 128))
+        y = clamp(-1.0, 1.0, (self.height() / 2 - event.position().y()) / (self.height() * 0.45))
+        if self.prev_x is not None:
+            movement = 0
+            if self.prev_x < x:
+                movement = 1
+            elif self.prev_x > x:
+                movement = -1
+            if movement != 0:
+                px = self.prev_x
+                py = self.prev_y
+                step = (y - py)/abs(x - px)
+                while px != x:
+                    px += movement
+                    py += step
+                    self.samples[px] = py
+        self.samples[x] = y
+        self.prev_x = x
+        self.prev_y = y
+
+    def mouseReleaseEvent(self, event, /):
+        self.main_synth.update_wavetable(self.item, numpy.array(self.samples))
+        self.update_waveform()
+        self.prev_x = None
+        self.prev_y = None
+
+    def update_waveform(self):
+        self.samples = self.main_synth.wavetables[self.item].tolist()
+
+
+class SingleWavetable(QWidget):
+    def __init__(self, main_synth: synth.Synth, item: int):
+        super().__init__()
+        self.main_synth = main_synth
+        self.item = item
+        self.waveform = WaveDisplay(self.main_synth, self.item)
+        self.button_layout_1 = QHBoxLayout()
+        self.setStyleSheet("QLabel { background-color: #000000; }")
+        self.button_layout_1.addWidget(QLabel(f"W{item + 1}"))
+        waveform_types = ['ZRO', 'SIN', 'SQR', 'TRI', 'SAW']
+        self.buttons = [QPushButton(waveform_types[i]) for i in range(5)]
+        for i in range(5):
+            self.buttons[i].clicked.connect(partial(self.change_waveform, i))
+            self.button_layout_1.addWidget(self.buttons[i])
+
+        self.sample_button = QPushButton('Sample')
+        self.sample_button.clicked.connect(lambda x: self.get_samples())
+        self.spectrum_button = QPushButton('Spectrum')
+        self.spectrum_button.clicked.connect(lambda x: self.get_spectrum())
+        self.file_button = QPushButton('File')
+        self.file_button.clicked.connect(lambda x: self.get_file())
+
+        self.button_layout_2 = QHBoxLayout()
+        self.button_layout_2.addWidget(self.sample_button)
+        self.button_layout_2.addWidget(self.spectrum_button)
+        self.button_layout_2.addWidget(self.file_button)
+
+        self.waveform.setFixedHeight(100)
+
+        layout = QVBoxLayout()
+        layout.addLayout(self.button_layout_1)
+        layout.addLayout(self.button_layout_2)
+        layout.addWidget(self.waveform)
+
+        self.setLayout(layout)
+
+    def change_waveform(self, wave_type):
+        if wave_type == 0:
+            wave = numpy.zeros((128,), dtype=numpy.float32)
+        elif wave_type == 1:
+            wave = numpy.sin(numpy.arange(128, dtype=numpy.float32) / 64 * numpy.pi)[:128]
+        elif wave_type == 2:
+            wave = 1 - numpy.floor(numpy.arange(128, dtype=numpy.float32) / 64)[:128] * 2
+        elif wave_type == 3:
+            wave = numpy.array([0, 1, 0, -1])
+        elif wave_type == 4:
+            wave = numpy.arange(128, dtype=numpy.float32) / 64 - 1
+        else:
+            raise ValueError("wave_type must be an integer between 0 and 4.")
+        self.main_synth.update_wavetable(self.item, wave)
+        self.waveform.update_waveform()
+
+    def get_samples(self):
+        text, ok = QInputDialog.getMultiLineText(self, f"W{self.item+1} Samples", "Enter numbers separated by commas:")
+        if not ok:
+            return
+        try:
+            wave = numpy.array(list(map(float, text.split(","))), dtype=numpy.float32)
+            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.waveform.update_waveform()
+        except ValueError:
+            QMessageBox.critical(self, "Error", "Error processing input.")
+
+    def get_spectrum(self):
+        text, ok = QInputDialog.getMultiLineText(self, f"W{self.item+1} Spectrum", "Enter numbers separated by commas:")
+        if not ok:
+            return
+        try:
+            spectrum = list(map(float, text.split(",")))
+            wave = numpy.zeros((128,), dtype=numpy.float32)
+            arange = numpy.arange(128, dtype=numpy.float32) / 64 * numpy.pi
+            for i in range(len(spectrum)):
+                wave += numpy.sin(arange * (i+1)) * spectrum[i]
+            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.waveform.update_waveform()
+        except ValueError:
+            QMessageBox.critical(self, "Error", "Error processing input.")
+
+    def get_file(self):
+        file, ok = QFileDialog.getOpenFileUrl(self, f"Import W{self.item+1} from file", filter="WAV files (*.wav)")
+        if not ok:
+            return
+        try:
+            path = os.path.realpath(file.path())
+            data, sr = soundfile.read(path, always_2d=True)
+            data = numpy.asarray(data, dtype=numpy.float32)
+            wave = numpy.mean(data, axis=1)
+            factor = max(numpy.max(wave), -numpy.min(wave))
+            if factor != 0:
+                wave /= factor
+            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.waveform.update_waveform()
+        except Exception as e:
+            print(repr(e))
+            QMessageBox.critical(self, "Error", f"Error processing input:\n{e}")
+
+
+
+
+class WavetableLayout(QVBoxLayout):
+    def __init__(self, main_synth: synth.Synth):
+        super().__init__()
+        self.main_synth = main_synth
+        for i in range(2):
+            tmp = QHBoxLayout()
+            tmp.addWidget(SingleWavetable(self.main_synth, i * 2))
+            sep = QFrame()
+            sep.setFrameShape(QFrame.VLine)
+            sep.setStyleSheet(
+                "QFrame { background-color: #888888; }"
+            )
+            tmp.addWidget(sep)
+            tmp.addWidget(SingleWavetable(self.main_synth, i * 2 + 1))
+            self.addLayout(tmp)
+            if i == 0:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setStyleSheet(
+                    "QFrame { background-color: #888888; }"
+                )
+                self.addWidget(sep)
+
+
 class OutputLayout(QVBoxLayout):
     def __init__(self, main_synth: synth.Synth):
         super().__init__()
@@ -200,7 +384,11 @@ class SynthUI(QWidget):
         super().__init__()
         self.main_synth = main_synth
         self.setWindowTitle("4W4O Python Edition")
-        self.setLayout(OutputLayout(self.main_synth))
+
+        layout = QVBoxLayout()
+        layout.addLayout(WavetableLayout(self.main_synth))
+        layout.addLayout(OutputLayout(self.main_synth))
+        self.setLayout(layout)
 
         self.setAutoFillBackground(True)
         palette = self.palette()
@@ -213,7 +401,8 @@ class SynthUI(QWidget):
             "QDoubleSpinBox { color: #FFFFFF; background-color: #1A1A1A; border: 1px solid #333333; }"
             "QComboBox { color: #FFFFFF; background-color: #1A1A1A; border: 1px solid #333333; }"
             "QPushButton { color: #FFFFFF; background-color: #222222; border: 1px solid #444444; }"
-            "QPushButton:checked { color: #FFFFFF; background-color: #777777; border: 1px solid #444444; }"
+            "QPushButton:hover,QComboBox:hover,QDoubleSpinBox:hover { background-color: #444444; }"
+            "QPushButton:checked { border: 2px solid #EEEEEE; }"
             "QFrame { color: #FFFFFF; background-color: #111111; border: 1px solid #444444; }"
             "QLabel { background-color: #111111; color: #FFFFFF; border: 0px; }"
         )
