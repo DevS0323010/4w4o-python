@@ -2,8 +2,8 @@ import os
 import sys
 from functools import partial
 
-from PySide6.QtCore import QPoint
-from PySide6.QtGui import QPalette, Qt, QPainter, QPen
+from PySide6.QtCore import *
+from PySide6.QtGui import *
 import soundfile
 import synth
 from PySide6.QtWidgets import *
@@ -379,6 +379,73 @@ class OutputLayout(QVBoxLayout):
             self.addLayout(EnvelopeFilterLayout(self.main_synth, i))
 
 
+class Key(QPushButton):
+    def __init__(self, main_synth: synth.Synth, note: int):
+        super().__init__()
+        self.frequency = 440.0 * 2.0**((note-69)/12)
+        self.setFixedHeight(50)
+        self.main_synth = main_synth
+        if note % 12 in [1, 3, 6, 8, 10]:
+            self.setStyleSheet(
+                "QPushButton { background-color: #222222; border: 1px solid #444444; }"
+                "QPushButton:hover { background-color: #444444; }"
+            )
+        else:
+            self.setStyleSheet(
+                "QPushButton { background-color: #AAAAAA; border: 1px solid #444444; }"
+                "QPushButton:hover { background-color: #CCCCCC; }"
+            )
+        self.pressed.connect(self.key_down)
+        self.released.connect(self.key_up)
+
+    def key_down(self):
+        self.main_synth.start_frequency(self.frequency)
+
+    def key_up(self):
+        self.main_synth.stop_frequency(self.frequency)
+
+
+class Player(QFrame):
+    def __init__(self, main_synth: synth.Synth):
+        super().__init__()
+        self.main_synth = main_synth
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for i in range(48, 84):
+            layout.addWidget(Key(self.main_synth, i))
+        self.setLayout(layout)
+
+
+class KeyPressFilter(QObject):
+    def __init__(self, parent, main_synth: synth.Synth):
+        super().__init__(parent=parent)
+        self.key_map = {
+            90: 48, 83: 49, 88: 50, 68: 51, 67: 52, 86: 53, 71: 54, 66: 55, 72: 56, 78: 57, 74: 58, 77: 59,
+            44: 60, 76: 61, 46: 62, 59: 63, 47: 64,
+            81: 60, 50: 61, 87: 62, 51: 63, 69: 64, 82: 65, 53: 66, 84: 67, 54: 68, 89: 69, 55: 70, 85: 71,
+            73: 72, 57: 73, 79: 74, 48: 75, 80: 76, 91: 77, 61: 78, 93: 79
+        }
+        self.note_to_freq = lambda x: 440.0 * 2.0**((x-69)/12)
+        self.main_synth = main_synth
+
+    def eventFilter(self, widget, event: QEvent):
+        if event.type() == QEvent.KeyPress and not event.isAutoRepeat():
+            if event.modifiers():
+                return False
+            kei = event.key()
+            if kei in self.key_map:
+                self.main_synth.start_frequency(self.note_to_freq(self.key_map[kei]))
+        elif event.type() == QEvent.KeyRelease and not event.isAutoRepeat():
+            if event.modifiers():
+                return False
+            kei = event.key()
+            if kei in self.key_map:
+                self.main_synth.stop_frequency(self.note_to_freq(self.key_map[kei]))
+        return False
+
+
 class SynthUI(QWidget):
     def __init__(self, main_synth: synth.Synth):
         super().__init__()
@@ -388,6 +455,7 @@ class SynthUI(QWidget):
         layout = QVBoxLayout()
         layout.addLayout(WavetableLayout(self.main_synth))
         layout.addLayout(OutputLayout(self.main_synth))
+        layout.addWidget(Player(self.main_synth))
         self.setLayout(layout)
 
         self.setAutoFillBackground(True)
@@ -408,7 +476,9 @@ class SynthUI(QWidget):
         )
 
         self.show()
-        self.setFixedSize(self.size())
+        self.setFixedSize(600, 800)
+        self.eventFilter = KeyPressFilter(self, self.main_synth)
+        self.installEventFilter(self.eventFilter)
 
 
 if __name__ == '__main__':
