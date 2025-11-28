@@ -166,7 +166,7 @@ class Synth:
         with self.lock:
             self.volume[item] = data
 
-    def output_file(self, filename: str):
+    def output_state(self):
         data = {
             "wavetables": [table.tolist() for table in self.wavetables],
             "outputs": [list(x) for x in self.outputs],
@@ -177,12 +177,9 @@ class Synth:
             "absolute": [list(x) for x in self.absolute],
             "modulations": self.modulations
         }
-        with open(filename, "w") as f:
-            json.dump(data, f)
+        return data
 
-    def read_from_file(self, filename: str):
-        with open(filename) as f:
-            data = json.load(f)
+    def read_from_state(self, data):
         self.wavetables = [numpy.array(table) for table in data["wavetables"]]
         self.outputs = [tuple(x) for x in data["outputs"]]
         self.volume = [tuple(x) for x in data["volume"]]
@@ -191,6 +188,17 @@ class Synth:
         self.frequency = [tuple(x) for x in data["frequency"]]
         self.absolute = [tuple(x) for x in data["absolute"]]
         self.modulations = data["modulations"]
+        self._setup_filters()
+
+    def output_file(self, filename: str):
+        data = self.output_state()
+        with open(filename, "w") as f:
+            json.dump(data, f)
+
+    def read_from_file(self, filename: str):
+        with open(filename) as f:
+            data = json.load(f)
+            self.read_from_state(data)
 
     def _get_wavetable(self, table_num, t):
         f = t * 128

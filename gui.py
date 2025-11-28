@@ -1,7 +1,8 @@
+import math
 import os
 import sys
 from functools import partial
-
+from collections import deque
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 import soundfile
@@ -9,8 +10,29 @@ import synth
 from PySide6.QtWidgets import *
 
 
+class SynthEditor:
+    def __init__(self, synthesizer: synth.Synth, maximum_undo_depth: int = 50):
+        self.synth = synthesizer
+        self.undo_stack = deque(maxlen=maximum_undo_depth)
+        self.redo_stack = []
+
+    def record_state(self):
+        self.undo_stack.append(self.synth.output_state())
+        self.redo_stack.clear()
+
+    def undo(self):
+        if len(self.undo_stack) > 0:
+            self.redo_stack.append(self.synth.output_state())
+            self.synth.read_from_state(self.undo_stack.pop())
+
+    def redo(self):
+        if len(self.redo_stack) > 0:
+            self.undo_stack.append(self.synth.output_state())
+            self.synth.read_from_state(self.redo_stack.pop())
+
+
 class SingleOscillator(QFrame):
-    def __init__(self, main_synth: synth.Synth, item: int, osc_id: int):
+    def __init__(self, main_synth: SynthEditor, item: int, osc_id: int):
         super().__init__()
         self.item = item
         self.main_synth = main_synth
@@ -44,36 +66,48 @@ class SingleOscillator(QFrame):
         self.setLayout(self.h_layout)
 
     def update_amplitude(self, amplitude):
-        tmp = list(self.main_synth.volume[self.item])
+        tmp = list(self.main_synth.synth.volume[self.item])
         tmp[self.osc_id] = amplitude
-        self.main_synth.update_volume(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_volume(self.item, tuple(tmp))
 
     def update_wavetable(self, wavetable):
-        tmp = list(self.main_synth.outputs[self.item])
+        tmp = list(self.main_synth.synth.outputs[self.item])
         tmp[self.osc_id] = wavetable - 1
-        self.main_synth.update_output_wavetable(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_output_wavetable(self.item, tuple(tmp))
         self.update_items()
 
     def update_frequency(self, frequency):
-        tmp = list(self.main_synth.frequency[self.item])
+        tmp = list(self.main_synth.synth.frequency[self.item])
         tmp[self.osc_id] = frequency
-        self.main_synth.update_frequency(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_frequency(self.item, tuple(tmp))
 
     def update_absolute(self):
-        tmp = list(self.main_synth.absolute[self.item])
+        tmp = list(self.main_synth.synth.absolute[self.item])
         tmp[self.osc_id] = not tmp[self.osc_id]
-        self.main_synth.update_frequency_type(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_frequency_type(self.item, tuple(tmp))
         self.update_items()
 
     def update_items(self):
-        self.amplitude.setValue(self.main_synth.volume[self.item][self.osc_id])
-        self.wave.setCurrentIndex(self.main_synth.outputs[self.item][self.osc_id] + 1)
-        self.frequency.setValue(self.main_synth.frequency[self.item][self.osc_id])
-        self.absolute.setText("Hz" if self.main_synth.absolute[self.item][self.osc_id] else "f")
+        self.amplitude.blockSignals(True)
+        self.wave.blockSignals(True)
+        self.frequency.blockSignals(True)
+        self.absolute.blockSignals(True)
+        self.amplitude.setValue(self.main_synth.synth.volume[self.item][self.osc_id])
+        self.wave.setCurrentIndex(self.main_synth.synth.outputs[self.item][self.osc_id] + 1)
+        self.frequency.setValue(self.main_synth.synth.frequency[self.item][self.osc_id])
+        self.absolute.setText("Hz" if self.main_synth.synth.absolute[self.item][self.osc_id] else "f")
+        self.amplitude.blockSignals(False)
+        self.wave.blockSignals(False)
+        self.frequency.blockSignals(False)
+        self.absolute.blockSignals(False)
 
 
 class WaveModulationLayout(QHBoxLayout):
-    def __init__(self, main_synth: synth.Synth, item: int):
+    def __init__(self, main_synth: SynthEditor, item: int):
         super().__init__()
         self.item = item
         self.main_synth = main_synth
@@ -92,17 +126,20 @@ class WaveModulationLayout(QHBoxLayout):
         self.update_items()
 
     def update_modulation(self, modulation):
-        self.main_synth.modulations[self.item] = modulation
+        self.main_synth.record_state()
+        self.main_synth.synth.modulations[self.item] = modulation
         self.update_items()
 
     def update_items(self):
+        self.modulation.blockSignals(True)
         self.wave_1.update_items()
-        self.modulation.setCurrentIndex(self.main_synth.modulations[self.item])
+        self.modulation.setCurrentIndex(self.main_synth.synth.modulations[self.item])
         self.wave_2.update_items()
+        self.modulation.blockSignals(False)
 
 
 class EnvelopeFilterLayout(QHBoxLayout):
-    def __init__(self, main_synth: synth.Synth, item: int):
+    def __init__(self, main_synth: SynthEditor, item: int):
         super().__init__()
         self.main_synth = main_synth
         self.item = item
@@ -148,9 +185,10 @@ class EnvelopeFilterLayout(QHBoxLayout):
         self.addWidget(self.filter_box)
 
     def update_envelope_item(self, item, new):
-        tmp = list(self.main_synth.envelope[self.item])
+        tmp = list(self.main_synth.synth.envelope[self.item])
         tmp[item] = new
-        self.main_synth.update_envelope(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_envelope(self.item, tuple(tmp))
 
     def update_filter_item(self, item, checked=None, value=None):
         if checked is None:
@@ -160,23 +198,32 @@ class EnvelopeFilterLayout(QHBoxLayout):
             value = self.filter_params[item].value()
             update = True
         new = value if checked else None
-        tmp = list(self.main_synth.filter_parameters[self.item])
+        tmp = list(self.main_synth.synth.filter_parameters[self.item])
         tmp[item] = new
-        self.main_synth.update_filters(self.item, tuple(tmp))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_filters(self.item, tuple(tmp))
         if update:
             self.update_values()
 
     def update_values(self):
-        tmp = list(self.main_synth.envelope[self.item])
+        for i in range(4):
+            self.envelope_params[i].blockSignals(True)
+        for i in range(2):
+            self.filter_params[i].blockSignals(True)
+        tmp = list(self.main_synth.synth.envelope[self.item])
         for i in range(4):
             self.envelope_params[i].setValue(tmp[i])
-        tmp = list(self.main_synth.filter_parameters[self.item])
+        tmp = list(self.main_synth.synth.filter_parameters[self.item])
         for i in range(2):
             if tmp[i] is None:
                 self.filter_enabled[i].setChecked(False)
             else:
                 self.filter_enabled[i].setChecked(True)
                 self.filter_params[i].setValue(tmp[i])
+        for i in range(4):
+            self.envelope_params[i].blockSignals(False)
+        for i in range(2):
+            self.filter_params[i].blockSignals(False)
 
 
 def clamp(a, b, value):
@@ -184,11 +231,11 @@ def clamp(a, b, value):
 
 
 class WaveDisplay(QFrame):
-    def __init__(self, main_synth: synth.Synth, item: int):
+    def __init__(self, main_synth: SynthEditor, item: int):
         super().__init__()
         self.main_synth = main_synth
         self.item = item
-        self.samples = self.main_synth.wavetables[item].tolist()
+        self.samples = self.main_synth.synth.wavetables[item].tolist()
         self.prev_x = None
         self.prev_y = None
 
@@ -232,17 +279,18 @@ class WaveDisplay(QFrame):
         self.prev_y = y
 
     def mouseReleaseEvent(self, event, /):
-        self.main_synth.update_wavetable(self.item, numpy.array(self.samples))
+        self.main_synth.record_state()
+        self.main_synth.synth.update_wavetable(self.item, numpy.array(self.samples))
         self.update_waveform()
         self.prev_x = None
         self.prev_y = None
 
     def update_waveform(self):
-        self.samples = self.main_synth.wavetables[self.item].tolist()
+        self.samples = self.main_synth.synth.wavetables[self.item].tolist()
 
 
 class SingleWavetable(QWidget):
-    def __init__(self, main_synth: synth.Synth, item: int):
+    def __init__(self, main_synth: SynthEditor, item: int):
         super().__init__()
         self.main_synth = main_synth
         self.item = item
@@ -268,7 +316,7 @@ class SingleWavetable(QWidget):
         self.button_layout_2.addWidget(self.spectrum_button)
         self.button_layout_2.addWidget(self.file_button)
 
-        self.waveform.setFixedHeight(100)
+        self.waveform.setFixedHeight(80)
 
         layout = QVBoxLayout()
         layout.addLayout(self.button_layout_1)
@@ -290,7 +338,8 @@ class SingleWavetable(QWidget):
             wave = numpy.arange(128, dtype=numpy.float32) / 64 - 1
         else:
             raise ValueError("wave_type must be an integer between 0 and 4.")
-        self.main_synth.update_wavetable(self.item, wave)
+        self.main_synth.record_state()
+        self.main_synth.synth.update_wavetable(self.item, wave)
         self.waveform.update_waveform()
 
     def get_samples(self):
@@ -299,7 +348,8 @@ class SingleWavetable(QWidget):
             return
         try:
             wave = numpy.array(list(map(float, text.split(","))), dtype=numpy.float32)
-            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.main_synth.record_state()
+            self.main_synth.synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
             self.waveform.update_waveform()
         except ValueError:
             QMessageBox.critical(self, "Error", "Error processing input.")
@@ -314,7 +364,8 @@ class SingleWavetable(QWidget):
             arange = numpy.arange(128, dtype=numpy.float32) / 64 * numpy.pi
             for i in range(len(spectrum)):
                 wave += numpy.sin(arange * (i+1)) * spectrum[i]
-            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.main_synth.record_state()
+            self.main_synth.synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
             self.waveform.update_waveform()
         except ValueError:
             QMessageBox.critical(self, "Error", "Error processing input.")
@@ -324,36 +375,40 @@ class SingleWavetable(QWidget):
         if not ok:
             return
         try:
-            path = os.path.realpath(file.path())
+            path = file.toLocalFile()
             data, sr = soundfile.read(path, always_2d=True)
             data = numpy.asarray(data, dtype=numpy.float32)
             wave = numpy.mean(data, axis=1)
             factor = max(numpy.max(wave), -numpy.min(wave))
             if factor != 0:
                 wave /= factor
-            self.main_synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
+            self.main_synth.record_state()
+            self.main_synth.synth.update_wavetable(self.item, numpy.clip(wave, -1, 1))
             self.waveform.update_waveform()
         except Exception as e:
             print(repr(e))
             QMessageBox.critical(self, "Error", f"Error processing input:\n{e}")
 
 
-
-
 class WavetableLayout(QVBoxLayout):
-    def __init__(self, main_synth: synth.Synth):
+    def __init__(self, main_synth: SynthEditor):
         super().__init__()
         self.main_synth = main_synth
+        self.wavetable_elements = [SingleWavetable(self.main_synth, i) for i in range(4)]
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(0)
         for i in range(2):
             tmp = QHBoxLayout()
-            tmp.addWidget(SingleWavetable(self.main_synth, i * 2))
+            tmp.setContentsMargins(0, 0, 0, 0)
+            tmp.setSpacing(0)
+            tmp.addWidget(self.wavetable_elements[i * 2])
             sep = QFrame()
             sep.setFrameShape(QFrame.VLine)
             sep.setStyleSheet(
                 "QFrame { background-color: #888888; }"
             )
             tmp.addWidget(sep)
-            tmp.addWidget(SingleWavetable(self.main_synth, i * 2 + 1))
+            tmp.addWidget(self.wavetable_elements[i * 2 + 1])
             self.addLayout(tmp)
             if i == 0:
                 sep = QFrame()
@@ -363,11 +418,21 @@ class WavetableLayout(QVBoxLayout):
                 )
                 self.addWidget(sep)
 
+    def update_values(self):
+        for i in range(4):
+            self.wavetable_elements[i].waveform.blockSignals(True)
+        for i in range(4):
+            self.wavetable_elements[i].waveform.update_waveform()
+        for i in range(4):
+            self.wavetable_elements[i].waveform.blockSignals(False)
+
 
 class OutputLayout(QVBoxLayout):
-    def __init__(self, main_synth: synth.Synth):
+    def __init__(self, main_synth: SynthEditor):
         super().__init__()
         self.main_synth = main_synth
+        self.wave_mod_layouts = [WaveModulationLayout(self.main_synth, i) for i in range(4)]
+        self.env_filt_layouts = [EnvelopeFilterLayout(self.main_synth, i) for i in range(4)]
         for i in range(4):
             sep = QFrame()
             sep.setFrameShape(QFrame.HLine)
@@ -375,12 +440,17 @@ class OutputLayout(QVBoxLayout):
                 "QFrame { background-color: #888888; }"
             )
             self.addWidget(sep)
-            self.addLayout(WaveModulationLayout(self.main_synth, i))
-            self.addLayout(EnvelopeFilterLayout(self.main_synth, i))
+            self.addLayout(self.wave_mod_layouts[i])
+            self.addLayout(self.env_filt_layouts[i])
+
+    def update_values(self):
+        for i in range(4):
+            self.wave_mod_layouts[i].update_items()
+            self.env_filt_layouts[i].update_values()
 
 
 class Key(QPushButton):
-    def __init__(self, main_synth: synth.Synth, note: int):
+    def __init__(self, main_synth: SynthEditor, note: int):
         super().__init__()
         self.frequency = 440.0 * 2.0**((note-69)/12)
         self.setFixedHeight(50)
@@ -399,14 +469,14 @@ class Key(QPushButton):
         self.released.connect(self.key_up)
 
     def key_down(self):
-        self.main_synth.start_frequency(self.frequency)
+        self.main_synth.synth.start_frequency(self.frequency)
 
     def key_up(self):
-        self.main_synth.stop_frequency(self.frequency)
+        self.main_synth.synth.stop_frequency(self.frequency)
 
 
 class Player(QFrame):
-    def __init__(self, main_synth: synth.Synth):
+    def __init__(self, main_synth: SynthEditor):
         super().__init__()
         self.main_synth = main_synth
 
@@ -419,7 +489,7 @@ class Player(QFrame):
 
 
 class KeyPressFilter(QObject):
-    def __init__(self, parent, main_synth: synth.Synth):
+    def __init__(self, parent, main_synth: SynthEditor):
         super().__init__(parent=parent)
         self.key_map = {
             90: 48, 83: 49, 88: 50, 68: 51, 67: 52, 86: 53, 71: 54, 66: 55, 72: 56, 78: 57, 74: 58, 77: 59,
@@ -436,26 +506,110 @@ class KeyPressFilter(QObject):
                 return False
             kei = event.key()
             if kei in self.key_map:
-                self.main_synth.start_frequency(self.note_to_freq(self.key_map[kei]))
+                self.main_synth.synth.start_frequency(self.note_to_freq(self.key_map[kei]))
         elif event.type() == QEvent.KeyRelease and not event.isAutoRepeat():
             if event.modifiers():
                 return False
             kei = event.key()
             if kei in self.key_map:
-                self.main_synth.stop_frequency(self.note_to_freq(self.key_map[kei]))
+                self.main_synth.synth.stop_frequency(self.note_to_freq(self.key_map[kei]))
         return False
 
 
+class MenuBar(QHBoxLayout):
+    def __init__(self, main_synth: SynthEditor, update_method):
+        super().__init__()
+        self.main_synth = main_synth
+        self.update_method = update_method
+
+        self.new_button = QPushButton("New")
+        self.open_button = QPushButton("Open")
+        self.save_button = QPushButton("Save")
+        self.undo_button = QPushButton("Undo")
+        self.redo_button = QPushButton("Redo")
+
+        self.save_button.clicked.connect(self.save)
+        self.open_button.clicked.connect(self.open)
+        self.new_button.clicked.connect(self.new)
+        self.undo_button.clicked.connect(self.undo)
+        self.redo_button.clicked.connect(self.redo)
+
+        self.addWidget(self.new_button)
+        self.addWidget(self.open_button)
+        self.addWidget(self.save_button)
+        self.addWidget(self.undo_button)
+        self.addWidget(self.redo_button)
+
+        self.default = {
+            'wavetables': [[math.sin(i / 64 * math.pi) for i in range(128)],
+                           [0.0 for _ in range(128)], [0.0 for _ in range(128)], [0.0 for _ in range(128)]],
+            'outputs': [[0, -1], [-1, -1], [-1, -1], [-1, -1]], 'volume': [[0.2, 0], [0.0, 0], [0.0, 0], [0.0, 0]],
+            'envelope': [[0.0, 0.0, 1.0, 0.0] for _ in range(4)], 'filter_parameters': [[None, None] for _ in range(4)],
+            'frequency': [[1.0, 1.0] for _ in range(4)], 'absolute': [[False, False] for _ in range(4)],
+            'modulations': [0 for _ in range(4)]
+        }
+
+    def save(self):
+        file, ok = QFileDialog.getSaveFileUrl(self.save_button, f"Save Configuration", filter="JSON files (*.json)")
+        if not ok:
+            return
+        try:
+            path = file.toLocalFile()
+            self.main_synth.synth.output_file(path)
+            self.update_method()
+        except Exception as e:
+            print(repr(e))
+            QMessageBox.critical(self.save_button, "Error", f"Error processing file:\n{e}")
+
+    def open(self):
+        file, ok = QFileDialog.getOpenFileUrl(self.open_button, f"Load Configuration", filter="JSON files (*.json)")
+        if not ok:
+            return
+        try:
+            path = file.toLocalFile()
+            self.main_synth.record_state()
+            self.main_synth.synth.read_from_file(path)
+            self.update_method()
+        except Exception as e:
+            print(repr(e))
+            QMessageBox.critical(self.open_button, "Error", f"Error processing file:\n{e}")
+
+    def new(self):
+        self.main_synth.synth.read_from_state(self.default)
+        self.update_method()
+
+    def undo(self):
+        self.main_synth.undo()
+        self.update_method()
+
+    def redo(self):
+        self.main_synth.redo()
+        self.update_method()
+
+
 class SynthUI(QWidget):
-    def __init__(self, main_synth: synth.Synth):
+    def __init__(self, main_synth: SynthEditor):
         super().__init__()
         self.main_synth = main_synth
         self.setWindowTitle("4W4O Python Edition")
 
         layout = QVBoxLayout()
-        layout.addLayout(WavetableLayout(self.main_synth))
-        layout.addLayout(OutputLayout(self.main_synth))
-        layout.addWidget(Player(self.main_synth))
+        self.menu_bar = MenuBar(self.main_synth, self.update_everything)
+        layout.addLayout(self.menu_bar)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("QFrame { background-color: #888888; }")
+        layout.addWidget(sep)
+        self.wavetable_layout = WavetableLayout(self.main_synth)
+        layout.addLayout(self.wavetable_layout)
+        self.output_layout = OutputLayout(self.main_synth)
+        layout.addLayout(self.output_layout)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("QFrame { background-color: #888888; }")
+        layout.addWidget(sep)
+        self.player = Player(self.main_synth)
+        layout.addWidget(self.player)
         self.setLayout(layout)
 
         self.setAutoFillBackground(True)
@@ -475,10 +629,17 @@ class SynthUI(QWidget):
             "QLabel { background-color: #111111; color: #FFFFFF; border: 0px; }"
         )
 
-        self.show()
-        self.setFixedSize(600, 800)
+        self.setFixedSize(650, 800)
         self.eventFilter = KeyPressFilter(self, self.main_synth)
         self.installEventFilter(self.eventFilter)
+        self.menu_bar.new()
+        self.show()
+
+    def update_everything(self):
+        self.blockSignals(True)
+        self.wavetable_layout.update_values()
+        self.output_layout.update_values()
+        self.blockSignals(False)
 
 
 if __name__ == '__main__':
@@ -486,16 +647,10 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     s = synth.Synth()
+    e = SynthEditor(s)
 
-    s.update_wavetable(0, numpy.arange(128) / 64 - 1)
-    for i in range(4):
-        s.update_output_wavetable(i, (0, -1))
-        s.update_volume(i, (0.2, 0))
-        s.update_envelope(i, (0.2, 0.0, 1.0, 0.2))
-        s.update_filters(i, (5000, None))
-        s.update_frequency(i, (1.006 - i * 0.003, 1.0))
-        s.update_frequency_type(i, (False, False))
-        s.update_modulation(i, 0)
+    window = SynthUI(e)
 
-    window = SynthUI(s)
+    window.update_everything()
+
     app.exec()
