@@ -38,6 +38,7 @@ class Synth:
         self.playing_frequencies = {}
         self.lock = threading.Lock()
         self.p = pyaudio.PyAudio()
+        self.filter_states = {}
         if from_file is None:
             self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
             self.outputs = [(-1, -1), (-1, -1), (-1, -1), (-1, -1)]
@@ -63,10 +64,10 @@ class Synth:
     def _setup_filters(self):
         for i in range(4):
             if self.filter_parameters[i][0] is not None:
-                self.filters[i][0] = signal.butter(2, self.filter_parameters[i][0], fs=self.sample_rate,
+                self.filters[i][0] = signal.butter(8, self.filter_parameters[i][0], fs=self.sample_rate,
                                                    btype='lowpass', analog=False)
             if self.filter_parameters[i][1] is not None:
-                self.filters[i][1] = signal.butter(2, self.filter_parameters[i][1], fs=self.sample_rate,
+                self.filters[i][1] = signal.butter(8, self.filter_parameters[i][1], fs=self.sample_rate,
                                                    btype='highpass', analog=False)
 
     def update_wavetable(self, item: int, data: numpy.ndarray):
@@ -246,10 +247,21 @@ class Synth:
             else:
                 total = numpy.zeros(frame_count, dtype=numpy.float32)
         total = total * self._get_envelope(item, t, self.playing_frequencies[freq][1])
+        if freq not in self.filter_states:
+            self.filter_states[freq] = {0:[None, None], 1:[None, None], 2:[None, None], 3:[None, None]}
         if self.filter_parameters[item][0] is not None:
-            total = signal.filtfilt(*self.filters[item][0], total)
+            if freq not in self.filter_states or self.filter_states[freq][item][0] is None:
+                self.filter_states[freq][item][0] = signal.lfilter_zi(*self.filters[item][0]) * total[0]
+            total, self.filter_states[freq][item][0] = signal.lfilter(
+                *self.filters[item][0], total, zi=self.filter_states[freq][item][0]
+            )
+
         if self.filter_parameters[item][1] is not None:
-            total = signal.filtfilt(*self.filters[item][1], total)
+            if freq not in self.filter_states or self.filter_states[freq][item][1] is None:
+                self.filter_states[freq][item][1] = signal.lfilter_zi(*self.filters[item][1]) * total[0]
+            total, self.filter_states[freq][item][1] = signal.lfilter(
+                *self.filters[item][1], total, zi=self.filter_states[freq][item][1]
+            )
         return total
 
     def _generate_frequency(self, freq, data, frame_count):
@@ -285,6 +297,8 @@ class Synth:
                     removed_frequencies.append(freq)
             for freq in removed_frequencies:
                 del self.playing_frequencies[freq]
+                if freq in self.filter_states:
+                    del self.filter_states[freq]
         audio_data = numpy.clip(audio_data, -1.0, 1.0)
         return audio_data
 
