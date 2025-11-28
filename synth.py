@@ -268,12 +268,23 @@ class Synth:
         :param frame_count: The amount of samples to generate
         :return: The generated samples as a numpy array
         """
+        removed_frequencies = []
         if not self.playing_frequencies:
             audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
         else:
             audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
             for freq, data in self.playing_frequencies.items():
                 audio_data += self._generate_frequency(freq, data, frame_count)
+                if data[1] is None:
+                    continue
+                end_sample = data[0] - data[1]
+                max_release = 0
+                for i in range(4):
+                    max_release = max(max_release, self.envelope[i][3])
+                if end_sample > max_release * self.sample_rate:
+                    removed_frequencies.append(freq)
+            for freq in removed_frequencies:
+                del self.playing_frequencies[freq]
         return audio_data
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
