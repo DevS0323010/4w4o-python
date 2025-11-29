@@ -167,6 +167,11 @@ class Synth:
             self.volume[item] = data
 
     def output_state(self):
+        """
+        Returns the current state of the synth as a JSON-serializable dictionary.
+
+        :return: The synth state data as a dictionary
+        """
         data = {
             "wavetables": [table.tolist() for table in self.wavetables],
             "outputs": [list(x) for x in self.outputs],
@@ -180,6 +185,12 @@ class Synth:
         return data
 
     def read_from_state(self, data):
+        """
+        Restores the synth state from a dictionary of state data.
+
+        :param data: Dictionary containing synth state data (as returned by output_state)
+        :return: Nothing
+        """
         self.wavetables = [numpy.array(table) for table in data["wavetables"]]
         self.outputs = [tuple(x) for x in data["outputs"]]
         self.volume = [tuple(x) for x in data["volume"]]
@@ -191,11 +202,23 @@ class Synth:
         self._setup_filters()
 
     def output_file(self, filename: str):
+        """
+        Saves the current synth state to a JSON file.
+
+        :param filename: Path to the output JSON file
+        :return: Nothing
+        """
         data = self.output_state()
         with open(filename, "w") as f:
             json.dump(data, f)
 
     def read_from_file(self, filename: str):
+        """
+        Loads and restores the synth state from a JSON file.
+
+        :param filename: Path to the JSON file containing the state
+        :return: Nothing
+        """
         with open(filename) as f:
             data = json.load(f)
             self.read_from_state(data)
