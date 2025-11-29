@@ -1,6 +1,5 @@
 import math
-import os
-import sys
+import numpy
 from functools import partial
 from collections import deque
 from PySide6.QtCore import *
@@ -633,7 +632,6 @@ class SynthUI(QWidget):
         self.eventFilter = KeyPressFilter(self, self.main_synth)
         self.installEventFilter(self.eventFilter)
         self.menu_bar.new()
-        self.show()
 
     def update_everything(self):
         self.blockSignals(True)
@@ -641,16 +639,3 @@ class SynthUI(QWidget):
         self.output_layout.update_values()
         self.blockSignals(False)
 
-
-if __name__ == '__main__':
-    import numpy
-
-    app = QApplication(sys.argv)
-    s = synth.Synth()
-    e = SynthEditor(s)
-
-    window = SynthUI(e)
-
-    window.update_everything()
-
-    app.exec()
