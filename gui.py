@@ -47,6 +47,7 @@ class SingleOscillator(QFrame):
         self.amplitude.setDecimals(3)
         self.wave.addItems(["No", "W1", "W2", "W3", "W4"])
         self.frequency.setDecimals(3)
+        self.frequency.setMaximum(20000)
         self.absolute.setFixedWidth(30)
 
         self.amplitude.valueChanged.connect(lambda x: self.update_amplitude(x))
