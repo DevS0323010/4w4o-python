@@ -5,7 +5,7 @@ from collections import deque
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 import soundfile
-import synth
+from synth import synth
 from PySide6.QtWidgets import *
 
 
