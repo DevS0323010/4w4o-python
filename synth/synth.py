@@ -1,6 +1,6 @@
 import numpy
 from scipy import signal
-import pyaudio
+import sounddevice
 import threading
 import json
 
@@ -21,12 +21,14 @@ class Synth:
     absolute: list[tuple[bool, bool]]
     modulations: list[int]
 
-    def __init__(self, sample_rate=44100, buffer_size=1024, from_file=None):
+    def __init__(self, sample_rate=44100, buffer_size=1024, from_file=None, latency: str = 'low'):
         """
         A simple synthesizer that can play multiple frequencies simultaneously.
 
         :param sample_rate: Audio sample rate in Hz (default 44100)
         :param buffer_size: Size of audio buffer (default 1024)
+        :param from_file: The file of the preset to load from (optional)
+        :param latency: The latency of the output for ``sounddevice`` (default 'low')
         """
         self.filters = [[(None, None), (None, None)],
                         [(None, None), (None, None)],
@@ -37,7 +39,6 @@ class Synth:
         self.active_frequencies = set()
         self.playing_frequencies = {}
         self.lock = threading.Lock()
-        self.p = pyaudio.PyAudio()
         self.filter_states = {}
         if from_file is None:
             self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
@@ -52,14 +53,15 @@ class Synth:
             self.read_from_file(from_file)
 
         self._setup_filters()
-        self.stream = self.p.open(
-            format=pyaudio.paFloat32,
+        sounddevice.default.latency = latency
+        self.stream = sounddevice.Stream(
             channels=1,
-            rate=self.sample_rate,
-            output=True,
-            frames_per_buffer=self.buffer_size,
-            stream_callback=self._audio_callback
+            samplerate=self.sample_rate,
+            dtype=numpy.float32,
+            blocksize=self.buffer_size,
+            callback=self._audio_callback
         )
+        self.stream.start()
 
     def _setup_filters(self):
         for i in range(4):
@@ -333,14 +335,11 @@ class Synth:
         audio_data = numpy.clip(audio_data, -1.0, 1.0)
         return audio_data
 
-    def _audio_callback(self, in_data, frame_count, time_info, status):
-        """
-        Callback function that generates audio samples.
-        """
+    def _audio_callback(self, indata, outdata: numpy.ndarray, frames, time, status):
         with self.lock:
-            audio_data = self.generate_samples(frame_count)
+            audio_data = self.generate_samples(outdata.size)
 
-        return audio_data.tobytes(), pyaudio.paContinue
+        outdata[:, 0] = audio_data
 
     def start_frequency(self, frequency, volume=1.0):
         """
@@ -384,15 +383,14 @@ class Synth:
             self.playing_frequencies.clear()
 
     def stop_stream(self):
-        self.stream.stop_stream()
+        self.stream.stop()
 
     def start_stream(self):
-        self.stream.start_stream()
+        self.stream.start()
 
     def close(self):
         """
         Close the synthesizer and clean up resources.
         """
-        self.stream.stop_stream()
+        self.stream.stop()
         self.stream.close()
-        self.p.terminate()
