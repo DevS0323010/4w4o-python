@@ -452,7 +452,7 @@ class OutputLayout(QVBoxLayout):
 class Key(QPushButton):
     def __init__(self, main_synth: SynthEditor, note: int):
         super().__init__()
-        self.frequency = 440.0 * 2.0**((note-69)/12)
+        self.note = note
         self.setFixedHeight(50)
         self.main_synth = main_synth
         if note % 12 in [1, 3, 6, 8, 10]:
@@ -469,10 +469,10 @@ class Key(QPushButton):
         self.released.connect(self.key_up)
 
     def key_down(self):
-        self.main_synth.synth.start_frequency(self.frequency)
+        self.main_synth.synth.start_note(self.note)
 
     def key_up(self):
-        self.main_synth.synth.stop_frequency(self.frequency)
+        self.main_synth.synth.stop_note(self.note)
 
 
 class Player(QFrame):
@@ -506,13 +506,13 @@ class KeyPressFilter(QObject):
                 return False
             kei = event.key()
             if kei in self.key_map:
-                self.main_synth.synth.start_frequency(self.note_to_freq(self.key_map[kei]))
+                self.main_synth.synth.start_note(self.key_map[kei])
         elif event.type() == QEvent.KeyRelease and not event.isAutoRepeat():
             if event.modifiers():
                 return False
             kei = event.key()
             if kei in self.key_map:
-                self.main_synth.synth.stop_frequency(self.note_to_freq(self.key_map[kei]))
+                self.main_synth.synth.stop_note(self.key_map[kei])
         return False
 
 

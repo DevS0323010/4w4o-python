@@ -71,11 +71,11 @@ pip install -r requirements.txt
 
    ```python
    import time
-   s.start_frequency(440.0)
+   s.start_frequency(440.0) # Or s.start_note(69)
    time.sleep(1)
-   s.stop_frequency(440.0)
+   s.stop_frequency(440.0) # Or s.stop_note(69)
    ```
-   > **Important**: MIDI note support is not implemented yet. Use absolute frequencies (Hz) directly.
+
 4. Close the synthesizer:
 
     ```python

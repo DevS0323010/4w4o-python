@@ -347,6 +347,7 @@ class Synth:
 
         :param frequency: Frequency in Hz (can be any float value, including microtonal)
         :param volume: Volume of the note (default 1)
+        :return: Nothing
         """
         with self.lock:
             if frequency not in self.active_frequencies:
@@ -364,6 +365,25 @@ class Synth:
             if frequency in self.active_frequencies:
                 self.active_frequencies.remove(frequency)
                 self.playing_frequencies[frequency][1] = self.playing_frequencies[frequency][0]
+    
+    def start_note(self, note, volume=1.0):
+        """
+        Start playing at the specified note (using MIDI notes).
+
+        :param note: MIDI note number (0-127)
+        :param volume: Volume of the note (default 1)
+        :return: Nothing
+        """
+        self.start_frequency(440 * 2 ** ((note - 69) / 12), volume=volume)
+
+    def stop_note(self, note):
+        """
+        Stop playing at the specified note (using MIDI notes).
+
+        :param note: MIDI note number (0-127)
+        :return: Nothing
+        """
+        self.stop_frequency(440 * 2 ** ((note - 69) / 12))
 
     def get_active_frequencies(self):
         """
