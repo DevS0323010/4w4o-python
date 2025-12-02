@@ -248,7 +248,6 @@ class WaveDisplay(QFrame):
         painter.setPen(QPen(Qt.white, 1.5))
         painter.drawPolyline(points)
         painter.end()
-        self.update()
 
     def mousePressEvent(self, event, /):
         x = clamp(0, 127, round(event.position().x() / self.width() * 128))
@@ -256,6 +255,7 @@ class WaveDisplay(QFrame):
         self.samples[x] = y
         self.prev_x = x
         self.prev_y = y
+        self.update()
 
     def mouseMoveEvent(self, event, /):
         x = clamp(0, 127, round(event.position().x() / self.width() * 128))
@@ -277,6 +277,7 @@ class WaveDisplay(QFrame):
         self.samples[x] = y
         self.prev_x = x
         self.prev_y = y
+        self.update()
 
     def mouseReleaseEvent(self, event, /):
         self.main_synth.record_state()
@@ -284,6 +285,7 @@ class WaveDisplay(QFrame):
         self.update_waveform()
         self.prev_x = None
         self.prev_y = None
+        self.update()
 
     def update_waveform(self):
         self.samples = self.main_synth.synth.wavetables[self.item].tolist()
