@@ -3,6 +3,8 @@ from scipy import signal
 import sounddevice
 import threading
 import json
+from numba import jit
+from numba.types import float32, int32
 
 MIX = 0
 AMPLITUDE = 1
@@ -10,6 +12,73 @@ RING = 2
 FREQUENCY = 3
 PHASE = 4
 
+@jit((float32[:], float32[:]), nopython=True, fastmath=True, cache=True)
+def _get_wavetable_numba(wavetable, t):
+    """Optimized wavetable lookup with linear interpolation."""
+    f = t * 128.0
+    p = numpy.floor(f).astype(numpy.int32) & 127
+    i = f - numpy.floor(f)
+    np_idx = (p + 1) & 127
+    return (wavetable[p] * (1.0 - i) + wavetable[np_idx] * i).astype(numpy.float32)
+
+@jit((float32[:], float32, float32, float32, float32, float32, float32),
+     nopython=True, fastmath=True, cache=True)
+def _get_envelope_numba(t, attack, decay, sustain, release, end_time, sample_rate):
+    """Optimized envelope calculation."""
+    result = numpy.zeros_like(t)
+    attack_rate = 1.0 / attack if attack > 0 else 1e9
+    decay_rate = (1.0 - sustain) / decay if decay > 0 else 0.0
+    
+    for i in range(len(t)):
+        ti = t[i]
+        if ti < attack:
+            result[i] = ti * attack_rate
+        else:
+            result[i] = max(1.0 - (ti - attack) * decay_rate, sustain)
+        
+        if end_time >= 0:
+            end_time_sec = end_time / sample_rate
+            if ti > end_time_sec:
+                if end_time_sec < attack:
+                    end_status = end_time_sec * attack_rate
+                else:
+                    end_status = max(1.0 - (end_time_sec - attack) * decay_rate, sustain)
+                
+                if release > 0:
+                    result[i] = max(end_status * (1.0 - (ti - end_time_sec) / release), 0.0)
+                else:
+                    result[i] = 0.0
+    
+    return result
+
+@jit((float32[:], float32[:], int32, float32, float32),
+     nopython=True, fastmath=True, cache=True)
+def _mix_oscillators(w1, w2, modulation_type, vol1, vol2):
+    """Optimized oscillator mixing."""
+    if modulation_type == 0:  # MIX
+        return (w1 * vol1 + w2 * vol2) * float32(0.5)
+    elif modulation_type == 1:  # AMPLITUDE
+        return w1 * vol1 * (float32(1.0) + w2 * vol2)
+    elif modulation_type == 2:  # RING
+        return w1 * w2 * vol1 * vol2
+    else:
+        return numpy.zeros_like(w1)
+
+@jit((float32[:], float32, float32[:], float32, float32, float32, float32),
+     nopython=True, fastmath=True, cache=True)
+def _mix_oscillators_frequency(w1_table, freq1, w2, vol1, vol2, dt, pf):
+    instantaneous_freq = freq1 + freq1 * w2 * vol2
+    phase_increments = instantaneous_freq * dt
+    accumulated_phase = numpy.cumsum(phase_increments) + pf
+    w1 = _get_wavetable_numba(w1_table, accumulated_phase)
+    return w1 * vol1, accumulated_phase[-1]
+
+@jit((float32[:], float32[:], float32[:], float32, float32, float32),
+     nopython=True, fastmath=True, cache=True)
+def _mix_oscillators_phase(w1_table, t, w2, freq1, vol1, vol2):
+    phase = t + w2 * vol2 / freq1
+    w1 = _get_wavetable_numba(w1_table, phase * freq1)
+    return w1 * vol1
 
 class Synth:
     waveforms: list[numpy.ndarray]
@@ -21,7 +90,7 @@ class Synth:
     absolute: list[tuple[bool, bool]]
     modulations: list[int]
 
-    def __init__(self, sample_rate=44100, buffer_size=1024, from_file=None, latency: str = 'low'):
+    def __init__(self, sample_rate=44100, buffer_size=2048, from_file=None, latency: str = 'low'):
         """
         A simple synthesizer that can play multiple frequencies simultaneously.
 
@@ -35,6 +104,7 @@ class Synth:
                         [(None, None), (None, None)],
                         [(None, None), (None, None)]]
         self.sample_rate = sample_rate
+        self.sample_rate_reciprocal = 1.0 / self.sample_rate
         self.buffer_size = buffer_size
         self.active_frequencies = set()
         self.playing_frequencies = {}
@@ -88,7 +158,7 @@ class Synth:
                 numpy.arange(len(data) + 1),
                 numpy.append(data, [data[0]])
             )[:128]
-            self.wavetables[item] = new_data
+            self.wavetables[item] = new_data.astype(numpy.float32)
 
     def update_filters(self, item: int, data: tuple[int | float | None, int | float | None]):
         """
@@ -193,7 +263,7 @@ class Synth:
         :param data: Dictionary containing synth state data (as returned by output_state)
         :return: Nothing
         """
-        self.wavetables = [numpy.array(table) for table in data["wavetables"]]
+        self.wavetables = [numpy.array(table, dtype=numpy.float32) for table in data["wavetables"]]
         self.outputs = [tuple(x) for x in data["outputs"]]
         self.volume = [tuple(x) for x in data["volume"]]
         self.envelope = [tuple(x) for x in data["envelope"]]
@@ -225,63 +295,40 @@ class Synth:
             data = json.load(f)
             self.read_from_state(data)
 
-    def _get_wavetable(self, table_num, t):
-        f = t * 128
-        i, p = numpy.modf(f)
-        p = numpy.int8(p) & 127
-        np = (p + 1) & 127
-        return self.wavetables[table_num][p] * (1 - i) + self.wavetables[table_num][np] * i
-
-    def _get_envelope(self, item, t, end_time=None):
-        e = self.envelope[item]
-        offset = 1 / e[1] if e[1] > 0 else 2147483647
-        start = 1 / e[0] if e[0] > 0 else 2147483647
-        result = numpy.where(t < e[0], t * start, numpy.maximum(1 - (1 - e[2]) * (t - e[0]) * offset, e[2]))
-        if end_time is not None:
-            end_time /= self.sample_rate
-            end_status = end_time * start if end_time < e[0] else max(1 - (1 - e[2]) * (end_time - e[0]) * offset, e[2])
-            if e[3] > 0:
-                result = numpy.where(t > end_time, end_status * (1 - (t - end_time) / e[3]), result)
-                result = numpy.maximum(result, 0)
-            else:
-                result = numpy.where(t > end_time, 0, result)
-        return result
-
     def _generate_output(self, item, freq, t, frame_count):
         freq1 = self.frequency[item][0] if self.absolute[item][0] else freq * self.frequency[item][0]
         freq2 = self.frequency[item][1] if self.absolute[item][1] else freq * self.frequency[item][1]
+        
         if self.outputs[item][0] == -1:
             return numpy.zeros(frame_count, dtype=numpy.float32)
+        
+        w1 = _get_wavetable_numba(self.wavetables[self.outputs[item][0]], t * freq1)
+        
         if self.outputs[item][1] == -1:
-            total = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
+            total = w1 * self.volume[item][0]
         else:
-            w2 = self._get_wavetable(self.outputs[item][1], t * freq2) * self.volume[item][1]
-            if self.modulations[item] == MIX:
-                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
-                total = (w1 + w2) / 2
-            elif self.modulations[item] == AMPLITUDE:
-                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
-                total = w1 * (1 + w2)
-            elif self.modulations[item] == RING:
-                w1 = self._get_wavetable(self.outputs[item][0], t * freq1) * self.volume[item][0]
-                total = w1 * w2
-            elif self.modulations[item] == PHASE:
-                phase = t + w2 / freq1
-                w1 = self._get_wavetable(self.outputs[item][0], phase * freq1) * self.volume[item][0]
-                total = w1
+            w2 = _get_wavetable_numba(self.wavetables[self.outputs[item][1]], t * freq2)
+            
+            if self.modulations[item] == PHASE:
+                total = _mix_oscillators_phase(self.wavetables[self.outputs[item][0]], t, w2, freq1, 
+                                               self.volume[item][0], self.volume[item][1])
             elif self.modulations[item] == FREQUENCY:
-                instantaneous_freq = freq1 + freq1 * w2
-                dt = 1.0 / self.sample_rate
-                phase_increments = instantaneous_freq * dt
-                accumulated_phase = numpy.cumsum(phase_increments) + self.playing_frequencies[freq][2]
-                self.playing_frequencies[freq][2] = accumulated_phase[-1]
-                w1 = self._get_wavetable(self.outputs[item][0], accumulated_phase) * self.volume[item][0]
-                total = w1
+                total, self.playing_frequencies[freq][2] = \
+                    _mix_oscillators_frequency(self.wavetables[self.outputs[item][0]], freq1,
+                                              w2, self.volume[item][0], self.volume[item][1],
+                                              self.sample_rate_reciprocal, self.playing_frequencies[freq][2])
             else:
-                total = numpy.zeros(frame_count, dtype=numpy.float32)
-        total = total * self._get_envelope(item, t, self.playing_frequencies[freq][1])
+                total = _mix_oscillators(w1, w2, self.modulations[item], 
+                                        self.volume[item][0], self.volume[item][1])
+        
+        envelope = _get_envelope_numba(t, self.envelope[item][0], self.envelope[item][1],
+                                       self.envelope[item][2], self.envelope[item][3],
+                                       self.playing_frequencies[freq][1] if self.playing_frequencies[freq][1] is not None else -1,
+                                       self.sample_rate)
+        total = total * envelope
         if freq not in self.filter_states:
             self.filter_states[freq] = {0:[None, None], 1:[None, None], 2:[None, None], 3:[None, None]}
+        
         if self.filter_parameters[item][0] is not None:
             if freq not in self.filter_states or self.filter_states[freq][item][0] is None:
                 self.filter_states[freq][item][0] = signal.lfilter_zi(*self.filters[item][0]) * total[0]
@@ -299,11 +346,11 @@ class Synth:
 
     def _generate_frequency(self, freq, data, frame_count):
         phase = data[0]
-        t = (numpy.arange(frame_count) + phase) / self.sample_rate
+        t = (numpy.arange(frame_count, dtype=numpy.float32) + phase) * self.sample_rate_reciprocal
         audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
         for i in range(4):
             audio_data += self._generate_output(i, freq, t, frame_count)
-        self.playing_frequencies[freq][0] = phase + frame_count
+        data[0] = phase + frame_count
         return audio_data * self.playing_frequencies[freq][3]
 
     def generate_samples(self, frame_count):
@@ -313,26 +360,25 @@ class Synth:
         :param frame_count: The amount of samples to generate
         :return: The generated samples as a numpy array
         """
-        removed_frequencies = []
         if not self.playing_frequencies:
-            audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
-        else:
-            audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
-            for freq, data in self.playing_frequencies.items():
-                audio_data += self._generate_frequency(freq, data, frame_count)
-                if data[1] is None:
-                    continue
-                end_sample = data[0] - data[1]
-                max_release = 0
-                for i in range(4):
-                    max_release = max(max_release, self.envelope[i][3])
-                if end_sample > max_release * self.sample_rate:
-                    removed_frequencies.append(freq)
-            for freq in removed_frequencies:
-                del self.playing_frequencies[freq]
-                if freq in self.filter_states:
-                    del self.filter_states[freq]
-        audio_data = numpy.clip(audio_data, -1.0, 1.0)
+            return numpy.zeros(frame_count, dtype=numpy.float32)
+        
+        audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
+        removed_frequencies = []
+        
+        max_release = max(e[3] for e in self.envelope) * self.sample_rate
+        
+        for freq, data in self.playing_frequencies.items():
+            audio_data += self._generate_frequency(freq, data, frame_count)
+            
+            if data[1] is not None and (data[0] - data[1]) > max_release:
+                removed_frequencies.append(freq)
+        
+        for freq in removed_frequencies:
+            del self.playing_frequencies[freq]
+            del self.filter_states[freq]
+        
+        numpy.clip(audio_data, -1.0, 1.0, out=audio_data)
         return audio_data
 
     def _audio_callback(self, indata, outdata: numpy.ndarray, frames, time, status):
