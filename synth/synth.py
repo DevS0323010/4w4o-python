@@ -109,7 +109,6 @@ class Synth:
         self.active_frequencies = set()
         self.playing_frequencies = {}
         self.lock = threading.Lock()
-        self.filter_states = {}
         if from_file is None:
             self.wavetables = [numpy.zeros((128,), dtype=numpy.float32) for _ in range(4)]
             self.outputs = [(-1, -1), (-1, -1), (-1, -1), (-1, -1)]
@@ -141,6 +140,8 @@ class Synth:
             if self.filter_parameters[i][1] is not None:
                 self.filters[i][1] = signal.butter(8, self.filter_parameters[i][1], fs=self.sample_rate,
                                                    btype='highpass', analog=False)
+        
+        self.filter_states = [[None, None] for _ in range(4)]
 
     def update_wavetable(self, item: int, data: numpy.ndarray):
         """
@@ -263,15 +264,16 @@ class Synth:
         :param data: Dictionary containing synth state data (as returned by output_state)
         :return: Nothing
         """
-        self.wavetables = [numpy.array(table, dtype=numpy.float32) for table in data["wavetables"]]
-        self.outputs = [tuple(x) for x in data["outputs"]]
-        self.volume = [tuple(x) for x in data["volume"]]
-        self.envelope = [tuple(x) for x in data["envelope"]]
-        self.filter_parameters = [tuple(x) for x in data["filter_parameters"]]
-        self.frequency = [tuple(x) for x in data["frequency"]]
-        self.absolute = [tuple(x) for x in data["absolute"]]
-        self.modulations = data["modulations"]
-        self._setup_filters()
+        with self.lock:
+            self.wavetables = [numpy.array(table, dtype=numpy.float32) for table in data["wavetables"]]
+            self.outputs = [tuple(x) for x in data["outputs"]]
+            self.volume = [tuple(x) for x in data["volume"]]
+            self.envelope = [tuple(x) for x in data["envelope"]]
+            self.filter_parameters = [tuple(x) for x in data["filter_parameters"]]
+            self.frequency = [tuple(x) for x in data["frequency"]]
+            self.absolute = [tuple(x) for x in data["absolute"]]
+            self.modulations = data["modulations"]
+            self._setup_filters()
 
     def output_file(self, filename: str):
         """
@@ -326,32 +328,30 @@ class Synth:
                                        self.playing_frequencies[freq][1] if self.playing_frequencies[freq][1] is not None else -1,
                                        self.sample_rate)
         total = total * envelope
-        if freq not in self.filter_states:
-            self.filter_states[freq] = {0:[None, None], 1:[None, None], 2:[None, None], 3:[None, None]}
-        
-        if self.filter_parameters[item][0] is not None:
-            if freq not in self.filter_states or self.filter_states[freq][item][0] is None:
-                self.filter_states[freq][item][0] = signal.lfilter_zi(*self.filters[item][0]) * total[0]
-            total, self.filter_states[freq][item][0] = signal.lfilter(
-                *self.filters[item][0], total, zi=self.filter_states[freq][item][0]
-            )
-
-        if self.filter_parameters[item][1] is not None:
-            if freq not in self.filter_states or self.filter_states[freq][item][1] is None:
-                self.filter_states[freq][item][1] = signal.lfilter_zi(*self.filters[item][1]) * total[0]
-            total, self.filter_states[freq][item][1] = signal.lfilter(
-                *self.filters[item][1], total, zi=self.filter_states[freq][item][1]
-            )
         return total
 
-    def _generate_frequency(self, freq, data, frame_count):
-        phase = data[0]
-        t = (numpy.arange(frame_count, dtype=numpy.float32) + phase) * self.sample_rate_reciprocal
-        audio_data = numpy.zeros(frame_count, dtype=numpy.float32)
-        for i in range(4):
-            audio_data += self._generate_output(i, freq, t, frame_count)
-        data[0] = phase + frame_count
-        return audio_data * self.playing_frequencies[freq][3]
+    def _generate_channel(self, channel, frame_count):
+        total = numpy.zeros(frame_count, dtype=numpy.float32)
+        for freq, data in self.playing_frequencies.items():
+            phase = data[0]
+            t = (numpy.arange(frame_count, dtype=numpy.float32) + phase) * self.sample_rate_reciprocal
+            total += self._generate_output(channel, freq, t, frame_count) * self.playing_frequencies[freq][3]
+        
+        if self.filter_parameters[channel][0] is not None and self.filters[channel][0] is not None:
+            if self.filter_states[channel][0] is None:
+                self.filter_states[channel][0] = signal.lfilter_zi(*self.filters[channel][0]) * total[0]
+            total, self.filter_states[channel][0] = signal.lfilter(
+                *self.filters[channel][0], total, zi=self.filter_states[channel][0]
+            )
+
+        if self.filter_parameters[channel][1] is not None and self.filters[channel][1] is not None:
+            if self.filter_states[channel][1] is None:
+                self.filter_states[channel][1] = signal.lfilter_zi(*self.filters[channel][1]) * total[0]
+            total, self.filter_states[channel][1] = signal.lfilter(
+                *self.filters[channel][1], total, zi=self.filter_states[channel][1]
+            )
+
+        return total
 
     def generate_samples(self, frame_count):
         """
@@ -367,17 +367,13 @@ class Synth:
         removed_frequencies = []
         
         max_release = max(e[3] for e in self.envelope) * self.sample_rate
-        
+
+        for item in range(4):
+            audio_data += self._generate_channel(item, frame_count)
+
         for freq, data in self.playing_frequencies.items():
-            audio_data += self._generate_frequency(freq, data, frame_count)
-            
-            if data[1] is not None and (data[0] - data[1]) > max_release:
-                removed_frequencies.append(freq)
-        
-        for freq in removed_frequencies:
-            del self.playing_frequencies[freq]
-            del self.filter_states[freq]
-        
+            data[0] += frame_count
+
         numpy.clip(audio_data, -1.0, 1.0, out=audio_data)
         return audio_data
 
