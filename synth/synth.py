@@ -123,7 +123,7 @@ class Synth:
 
         self._setup_filters()
         sounddevice.default.latency = latency
-        self.stream = sounddevice.Stream(
+        self.stream = sounddevice.OutputStream(
             channels=1,
             samplerate=self.sample_rate,
             dtype=numpy.float32,
@@ -377,7 +377,7 @@ class Synth:
         numpy.clip(audio_data, -1.0, 1.0, out=audio_data)
         return audio_data
 
-    def _audio_callback(self, indata, outdata: numpy.ndarray, frames, time, status):
+    def _audio_callback(self, outdata: numpy.ndarray, frames, time, status):
         with self.lock:
             audio_data = self.generate_samples(outdata.size)
 
