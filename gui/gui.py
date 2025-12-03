@@ -51,6 +51,7 @@ class SingleOscillator(QFrame):
         self.frequency.setDecimals(3)
         self.frequency.setMaximum(20000)
         self.absolute.setFixedWidth(30)
+        self.wave.setFixedWidth(50)
 
         self.amplitude.valueChanged.connect(lambda x: self.update_amplitude(x))
         self.wave.currentIndexChanged.connect(lambda x: self.update_wavetable(x))
@@ -116,7 +117,7 @@ class WaveModulationLayout(QHBoxLayout):
 
         self.modulation = QComboBox()
         self.modulation.addItems(["Mix", "AM", "Ring", "FM", "PM"])
-        self.modulation.setFixedWidth(50)
+        self.modulation.setFixedWidth(60)
         self.modulation.currentIndexChanged.connect(lambda x: self.update_modulation(x))
 
         self.wave_1 = SingleOscillator(main_synth, item, 0)
@@ -634,7 +635,7 @@ class SynthUI(QWidget):
             "QLabel { background-color: #111111; color: #FFFFFF; border: 0px; }"
         )
 
-        self.setFixedSize(650, 800)
+        self.setFixedSize(700, 800)
         self.eventFilter = KeyPressFilter(self, self.main_synth)
         self.installEventFilter(self.eventFilter)
         self.menu_bar.new()
