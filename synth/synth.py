@@ -315,10 +315,10 @@ class Synth:
                 total = _mix_oscillators_phase(self.wavetables[self.outputs[item][0]], t, w2, freq1, 
                                                self.volume[item][0], self.volume[item][1])
             elif self.modulations[item] == FREQUENCY:
-                total, self.playing_frequencies[freq][2] = \
+                total, self.playing_frequencies[freq][2][item] = \
                     _mix_oscillators_frequency(self.wavetables[self.outputs[item][0]], freq1,
                                               w2, self.volume[item][0], self.volume[item][1],
-                                              self.sample_rate_reciprocal, self.playing_frequencies[freq][2])
+                                              self.sample_rate_reciprocal, self.playing_frequencies[freq][2][item])
             else:
                 total = _mix_oscillators(w1, w2, self.modulations[item], 
                                         self.volume[item][0], self.volume[item][1])
@@ -394,7 +394,7 @@ class Synth:
         with self.lock:
             if frequency not in self.active_frequencies:
                 self.active_frequencies.add(frequency)
-                self.playing_frequencies[frequency] = [0, None, 0, volume]
+                self.playing_frequencies[frequency] = [0, None, [0, 0, 0, 0], volume]
 
     def stop_frequency(self, frequency):
         """
