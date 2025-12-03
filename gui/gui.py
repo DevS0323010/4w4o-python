@@ -289,6 +289,7 @@ class WaveDisplay(QFrame):
 
     def update_waveform(self):
         self.samples = self.main_synth.synth.wavetables[self.item].tolist()
+        self.update()
 
 
 class SingleWavetable(QWidget):
