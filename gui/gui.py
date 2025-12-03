@@ -1,5 +1,6 @@
 import math
 import numpy
+import scipy
 from functools import partial
 from collections import deque
 from PySide6.QtCore import *
@@ -310,17 +311,24 @@ class SingleWavetable(QWidget):
             self.buttons[i].clicked.connect(partial(self.change_waveform, i))
             self.button_layout_1.addWidget(self.buttons[i])
 
-        self.sample_button = QPushButton('Sample')
+        self.sample_button = QPushButton('Samp')
         self.sample_button.clicked.connect(lambda x: self.get_samples())
-        self.spectrum_button = QPushButton('Spectrum')
+        self.spectrum_button = QPushButton('Spec')
         self.spectrum_button.clicked.connect(lambda x: self.get_spectrum())
         self.file_button = QPushButton('File')
         self.file_button.clicked.connect(lambda x: self.get_file())
+        self.normalize_button = QPushButton('Norm')
+        self.normalize_button.clicked.connect(lambda x: self.normalize_waveform())
+        self.smooth_button = QPushButton('Smth')
+        self.smooth_button.clicked.connect(lambda x: self.smooth_waveform())
+
 
         self.button_layout_2 = QHBoxLayout()
         self.button_layout_2.addWidget(self.sample_button)
         self.button_layout_2.addWidget(self.spectrum_button)
         self.button_layout_2.addWidget(self.file_button)
+        self.button_layout_2.addWidget(self.normalize_button)
+        self.button_layout_2.addWidget(self.smooth_button)
 
         self.waveform.setFixedHeight(80)
 
@@ -394,6 +402,26 @@ class SingleWavetable(QWidget):
         except Exception as e:
             print(repr(e))
             QMessageBox.critical(self, "Error", f"Error processing input:\n{e}")
+    
+    def normalize_waveform(self):
+        wave = self.main_synth.synth.wavetables[self.item]
+        max_val = numpy.max(wave)
+        min_val = numpy.min(wave)
+        if max_val != min_val and (max_val != 1.0 or min_val != -1.0):
+            wave = (wave - min_val) / (max_val - min_val) * 2 - 1
+            self.main_synth.record_state()
+            self.main_synth.synth.update_wavetable(self.item, wave)
+            self.waveform.update_waveform()
+    
+    def smooth_waveform(self):
+        box_pts = 9
+        wave = numpy.tile(self.main_synth.synth.wavetables[self.item], 3)
+        box = numpy.array([1, 8, 28, 56, 70, 56, 28, 8, 1])/256
+        wave = numpy.convolve(wave, box, mode='same')[128:256]
+        self.main_synth.record_state()
+        self.main_synth.synth.update_wavetable(self.item, wave)
+        self.waveform.update_waveform()
+
 
 
 class WavetableLayout(QVBoxLayout):
