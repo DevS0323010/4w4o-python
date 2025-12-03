@@ -45,6 +45,8 @@ class SingleOscillator(QFrame):
         self.absolute = QPushButton()
 
         self.amplitude.setDecimals(3)
+        self.frequency.setMaximum(10)
+        self.amplitude.setMinimum(-10)
         self.wave.addItems(["No", "W1", "W2", "W3", "W4"])
         self.frequency.setDecimals(3)
         self.frequency.setMaximum(20000)
