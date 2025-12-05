@@ -27,7 +27,7 @@ def _get_envelope_numba(t, attack, decay, sustain, release, end_time, sample_rat
     """Optimized envelope calculation."""
     result = numpy.zeros_like(t)
     attack_rate = 1.0 / attack if attack > 0 else 1e9
-    decay_rate = (1.0 - sustain) / decay if decay > 0 else 0.0
+    decay_rate = (1.0 - sustain) / decay if decay > 0 else 1e9
     
     for i in range(len(t)):
         ti = t[i]
